@@ -66,7 +66,14 @@ The statusline and the menu-bar app are **independent** — install either one a
 
 ## Install
 
-Pick the path that matches what you want. Neither needs the other.
+Pick the path that matches what you want. Neither needs the other. Or skip
+the manual steps and run the interactive setup, which asks what you want and
+defaults to both:
+```
+git clone https://github.com/gagoar/tricorder.git ~/.claude/tricorder-src
+cd ~/.claude/tricorder-src
+npm run setup
+```
 
 ### Statusline only
 ```
