@@ -6,13 +6,15 @@ import { mute } from "./mute";
 import { warp } from "./warp";
 import { showLogs } from "./log";
 import { ack, soundEnable, status } from "./status";
+import { soundSet } from "./catalog";
 
 const CMD_INDEX = 2;
 const ARG_INDEX = 3;
 const ARG2_INDEX = 4;
+const ARG3_INDEX = 5;
 const EXIT_ERR = 1;
 
-const COMMANDS: Readonly<Record<string, () => void>> = {
+const COMMANDS: Readonly<Record<string, () => void | Promise<void>>> = {
   statusline: () => renderStatusline(readStdin()),
   capture: () => capture(readStdin()),
   sound: () => playSound(process.argv[ARG_INDEX]),
@@ -22,9 +24,10 @@ const COMMANDS: Readonly<Record<string, () => void>> = {
   status: () => status(),
   ack: () => ack(process.argv[ARG_INDEX]),
   "sound-enable": () => soundEnable(process.argv[ARG_INDEX], process.argv[ARG2_INDEX]),
+  "sound-set": () => soundSet(process.argv[ARG_INDEX], process.argv[ARG2_INDEX], process.argv[ARG3_INDEX]),
 };
 
-function main(): void {
+async function main(): Promise<void> {
   const cmd = process.argv[CMD_INDEX] ?? "";
   const run = COMMANDS[cmd];
   if (run === undefined) {
@@ -32,11 +35,11 @@ function main(): void {
     process.exit(EXIT_ERR);
   }
   try {
-    run();
+    await run();
   } catch (err) {
     // Never crash the status line or a hook; surface to stderr only.
     process.stderr.write("tricorder: " + String(err) + "\n");
   }
 }
 
-main();
+void main();

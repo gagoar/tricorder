@@ -1,0 +1,73 @@
+/* Pixel-accurate recreations of the real Tricorder statusline and menu-bar
+   dropdown — one source of truth, used BOTH embedded live on the site and as
+   the source rendered into the README screenshots (docs/screenshots.sh).
+   Colors map to the real SGR codes used in src/statusline.ts:
+     91 -> red (ctx >=90%)   93 -> yellow (ctx >=70%)   32 -> green (ctx <70%)
+     96 -> cyan (PR links / intro ship)   90 -> dim (the "plan" word) */
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: transparent; }
+
+.term {
+  display: inline-block;
+  background: #1e1e1e;
+  border-radius: 10px;
+  padding: 16px 20px;
+  font-family: "SF Mono", "Menlo", ui-monospace, monospace;
+  font-size: 15px;
+  line-height: 1.6;
+  color: #d4d4d4;
+  white-space: pre;
+}
+.term .dots { margin-bottom: 10px; }
+.term .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 6px; }
+.term .dot.red { background: #ff5f56; }
+.term .dot.yellow { background: #ffbd2e; }
+.term .dot.green { background: #27c93f; }
+
+.c-red { color: #ff5f56; }
+.c-yellow { color: #ffd75f; }
+.c-green { color: #26a269; }
+.c-cyan { color: #34e2e2; }
+.c-dim { color: #7f8c8d; }
+.link { text-decoration: underline; text-decoration-style: dotted; }
+
+/* ---- native-macOS-style dark menu ---- */
+
+.menu {
+  display: inline-block;
+  width: 340px;
+  background: rgba(38, 38, 40, 0.97);
+  border-radius: 10px;
+  padding: 6px 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13.5px;
+  color: #eee;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+}
+.menu .row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 16px;
+}
+.menu .row img.icon { width: 16px; height: 16px; filter: invert(1) brightness(1.6); }
+.menu .row .label { flex: 1; }
+.menu .row .chevron, .menu .row .check { color: #aaa; width: 14px; text-align: center; }
+.menu .row.disabled { color: #888; }
+.menu .sep { height: 1px; background: rgba(255, 255, 255, 0.12); margin: 5px 0; }
+.menu .header {
+  padding: 4px 16px;
+  font-size: 11px;
+  color: #999;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.menu .logline {
+  padding: 1px 16px;
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+  color: #9aa;
+  white-space: pre;
+}
+.menu .row:hover:not(.disabled) { background: rgba(255, 255, 255, 0.08); }

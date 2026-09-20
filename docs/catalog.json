@@ -1,0 +1,120 @@
+{
+  "source": "https://www.trekcore.com/audio/",
+  "note": "Names/URLs only — no audio is bundled in this repo. Tricorder fetches your pick on demand, the same as clicking the link yourself.",
+  "clips": [
+    {
+      "name": "Please specify how you would like to proceed",
+      "category": "computer-voice",
+      "url": "https://www.trekcore.com/audio/computer/voice/pleasespecifyhowyouwouldliketoproceed_ep.mp3",
+      "bytes": 92193
+    },
+    {
+      "name": "Security authorisation required",
+      "category": "computer-voice",
+      "url": "https://www.trekcore.com/audio/computer/voice/securityauthorisationrequired_ep.mp3",
+      "bytes": 85281
+    },
+    {
+      "name": "Unable to comply",
+      "category": "computer-voice",
+      "url": "https://www.trekcore.com/audio/computer/voice/unabletocomply.mp3",
+      "bytes": 38000
+    },
+    {
+      "name": "Incoming transmission",
+      "category": "computer-voice",
+      "url": "https://www.trekcore.com/audio/computer/voice/incomingtransmission_clean.mp3",
+      "bytes": 71000
+    },
+    {
+      "name": "Warning: primary shields failing",
+      "category": "computer-voice",
+      "url": "https://www.trekcore.com/audio/computer/voice/warningprimaryshieldsfailing_ep.mp3",
+      "bytes": 81000
+    },
+    {
+      "name": "TNG red alert",
+      "category": "alert",
+      "url": "https://www.trekcore.com/audio/redalertandklaxons/tng_red_alert1.mp3",
+      "bytes": 859000
+    },
+    {
+      "name": "Voyager blue alert",
+      "category": "alert",
+      "url": "https://www.trekcore.com/audio/redalertandklaxons/voybluealert.mp3",
+      "bytes": 121000
+    },
+    {
+      "name": "Alert klaxon (clean)",
+      "category": "alert",
+      "url": "https://www.trekcore.com/audio/redalertandklaxons/alertklaxon_clean.mp3",
+      "bytes": 113000
+    },
+    {
+      "name": "TNG transporter (clean)",
+      "category": "transporter",
+      "url": "https://www.trekcore.com/audio/transporters/tng_transporter6_clean.mp3",
+      "bytes": 208353
+    },
+    {
+      "name": "Voyager transporter",
+      "category": "transporter",
+      "url": "https://www.trekcore.com/audio/transporters/voyager_transporter.mp3",
+      "bytes": 188000
+    },
+    {
+      "name": "TNG phaser (clean)",
+      "category": "weapon",
+      "url": "https://www.trekcore.com/audio/weapons/tng_phaser_clean.mp3",
+      "bytes": 64000
+    },
+    {
+      "name": "TNG photon torpedo (clean)",
+      "category": "weapon",
+      "url": "https://www.trekcore.com/audio/weapons/tng_torpedo_clean.mp3",
+      "bytes": 51000
+    },
+    {
+      "name": "TNG disruptor (clean)",
+      "category": "weapon",
+      "url": "https://www.trekcore.com/audio/weapons/tng_disruptor_clean.mp3",
+      "bytes": 25000
+    },
+    {
+      "name": "TNG door open",
+      "category": "door",
+      "url": "https://www.trekcore.com/audio/doors/tng_door_open.mp3",
+      "bytes": 59000
+    },
+    {
+      "name": "DS9 door",
+      "category": "door",
+      "url": "https://www.trekcore.com/audio/doors/ds9_door.mp3",
+      "bytes": 67000
+    },
+    {
+      "name": "TNG turbolift",
+      "category": "door",
+      "url": "https://www.trekcore.com/audio/turbolift/tng_turbolift_1.mp3",
+      "bytes": 28000
+    },
+    {
+      "name": "Engage (TNG)",
+      "category": "iconic",
+      "url": "https://www.trekcore.com/audio/computer/engage.mp3",
+      "bytes": 32521
+    },
+    {
+      "name": "Energize (TNG)",
+      "category": "iconic",
+      "url": "https://www.trekcore.com/audio/computer/energize.mp3",
+      "bytes": 48000
+    },
+    {
+      "name": "Energize (TOS)",
+      "category": "iconic",
+      "url": "https://www.trekcore.com/audio/toscomputer/tos_energize.mp3",
+      "bytes": 18000
+    }
+  ]
+}
