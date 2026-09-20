@@ -1,0 +1,11 @@
+{
+  "name": "tricorder",
+  "owner": { "name": "gagoar" },
+  "plugins": [
+    {
+      "name": "tricorder",
+      "source": "./plugin",
+      "description": "Always-on session panel + attention sounds."
+    }
+  ]
+}

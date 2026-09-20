@@ -1,0 +1,21 @@
+{
+  "muted": true,
+  "sounds": {
+    "question": {
+      "enabled": true,
+      "file": "/Users/gagofrigerio/.claude/tricorder/sounds/please-specify.mp3"
+    },
+    "permission": {
+      "enabled": false,
+      "file": "/Users/gagofrigerio/.claude/tricorder/sounds/security-authorisation.mp3"
+    },
+    "stop": {
+      "enabled": true,
+      "file": "/Users/gagofrigerio/.claude/tricorder/sounds/transporter-complete.mp3"
+    },
+    "plan": {
+      "enabled": true,
+      "file": "/Users/gagofrigerio/.claude/tricorder/sounds/engage.mp3"
+    }
+  }
+}

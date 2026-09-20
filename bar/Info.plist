@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>TricorderBar</string>
+  <key>CFBundleDisplayName</key><string>Tricorder</string>
+  <key>CFBundleIdentifier</key><string>com.gago.tricorder</string>
+  <key>CFBundleExecutable</key><string>TricorderBar</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.2.0</string>
+  <key>CFBundleVersion</key><string>0.2.0</string>
+  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <key>LSUIElement</key><true/>
+  <key>NSAppleEventsUsageDescription</key><string>Tricorder focuses your session's iTerm2 tab and flies the Enterprise.</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>com.gago.tricorder</string>
+      <key>CFBundleURLSchemes</key>
+      <array><string>tricorder</string></array>
+    </dict>
+  </array>
+</dict>
+</plist>
