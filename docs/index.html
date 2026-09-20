@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tricorder — Full Sensor Sweep of Your Claude Code Sessions</title>
+<meta name="description" content="An always-on LCARS statusline, a Starfleet away-team view in your macOS menu bar, and Star Trek attention klaxons for Claude Code + iTerm2.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="lcars-page">
+  <div class="lcars-topbar">
+    <span class="lcars-heading">Tricorder</span>
+    <nav>
+      <a href="index.html">Bridge</a>
+      <a href="sounds.html">Sound Catalog</a>
+      <a href="https://github.com/gagoar/tricorder">GitHub</a>
+    </nav>
+  </div>
+  <div class="lcars-sidebar">
+    <a class="lcars-block" href="#hero">Bridge</a>
+    <a class="lcars-block" href="#features">Systems</a>
+    <a class="lcars-block" href="#showcase">Sensors</a>
+    <a class="lcars-block" href="#install" id="install">Install</a>
+    <a class="lcars-block" href="sounds.html">Audio Bay</a>
+    <a class="lcars-block" href="https://github.com/gagoar/tricorder">Source</a>
+  </div>
+  <main class="lcars-main">
+
+    <section id="hero" style="text-align:center; padding-top:20px;">
+      <h1 class="lcars-heading" style="font-size:3.2rem; color:var(--primary);">Tricorder</h1>
+      <p style="font-size:1.2rem; max-width:640px; margin:0 auto 20px;">
+        Full sensor sweep of your Claude Code sessions — an always-on statusline,
+        a Starfleet away-team view in your menu bar, and attention klaxons, for macOS + iTerm2.
+      </p>
+      <div style="margin-bottom:28px;">
+        <a class="lcars-pill" href="#install">Install</a>
+        <a class="lcars-pill secondary" href="https://github.com/gagoar/tricorder">View on GitHub</a>
+        <a class="lcars-pill tanoi" href="sounds.html">Sound Catalog</a>
+      </div>
+      <iframe src="mockups/statusline.html" title="Tricorder statusline" width="780" height="155"
+        style="border:none; max-width:100%;"></iframe>
+    </section>
+
+    <section id="features">
+      <div class="lcars-section-header"><span class="lcars-heading">Systems Online</span></div>
+      <div class="lcars-grid-3">
+        <div class="lcars-panel">
+          <div class="lcars-heading">Statusline</div>
+          <p>Worktree, a color-graded context gauge, model, PRs, running sub-agents and
+             their model, and a plan-file link — only the lines that have something to say.</p>
+        </div>
+        <div class="lcars-panel">
+          <div class="lcars-heading">Away Team</div>
+          <p>One menu-bar icon reflects the highest-priority state across every session.
+             Click a row to jump straight to that session's iTerm2 tab.</p>
+        </div>
+        <div class="lcars-panel">
+          <div class="lcars-heading">Klaxons &amp; Restore</div>
+          <p>Configurable Star Trek attention sounds, muted by default, plus one-click
+             restore of whole project families after a restart.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="showcase">
+      <div class="lcars-section-header"><span class="lcars-heading">Sensor Readouts</span></div>
+      <div class="lcars-grid-3" style="grid-template-columns: 1.4fr 1fr;">
+        <div class="lcars-panel">
+          <div class="lcars-heading">Statusline</div>
+          <iframe src="mockups/statusline.html" title="Statusline detail" width="100%" height="155"
+            style="border:none; width:100%;"></iframe>
+        </div>
+        <div class="lcars-panel">
+          <div class="lcars-heading">Away Team Menu</div>
+          <iframe src="mockups/menu.html" title="Menu detail" width="100%" height="420"
+            style="border:none; width:100%;"></iframe>
+        </div>
+      </div>
+    </section>
+
+    <section id="install">
+      <div class="lcars-section-header"><span class="lcars-heading">Installation</span></div>
+      <p>Requires macOS, iTerm2, Node on <code>PATH</code>, and a Swift toolchain (plain <code>swiftc</code> — no Xcode).</p>
+
+      <p><strong>1. Install the plugin</strong></p>
+      <pre class="lcars-code">/plugin marketplace add ~/.claude/tricorder-src
+/plugin install tricorder@tricorder</pre>
+
+      <p><strong>2. Wire the statusline</strong> (plugins can't contribute one — add this once to <code>~/.claude/settings.json</code>)</p>
+      <pre class="lcars-code">"statusLine": {
+  "type": "command",
+  "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/tricorder statusline"
+}</pre>
+
+      <p><strong>3. Build and launch the menu-bar app</strong></p>
+      <pre class="lcars-code">npm install
+npm run build:bar
+cp plugin/bar/TricorderBar.app ~/Applications/ -R
+sed "s|__HOME__|$HOME|g" bar/com.gago.tricorder.bar.plist &gt; ~/Library/LaunchAgents/com.gago.tricorder.bar.plist
+launchctl load ~/Library/LaunchAgents/com.gago.tricorder.bar.plist</pre>
+      <p>macOS will ask once to let Tricorder control iTerm2 (for session focus, restore, and the Enterprise flyby) — allow it.</p>
+
+      <p>Full details, configuration, and the CLI reference live in the
+        <a href="https://github.com/gagoar/tricorder/blob/main/README.md">repo README</a>.</p>
+    </section>
+
+    <section id="warp">
+      <div class="lcars-section-header"><span class="lcars-heading">Fly The Enterprise</span></div>
+      <p>One menu click opens a fresh iTerm2 tab and flies the Enterprise across it.</p>
+      <pre class="lcars-code c-anakiwa" style="color:var(--anakiwa); overflow-x:auto;">                                                  ______
+                                     ___.--------'------`---------.____
+                               _.---'----------------------------------`---.__
+                             .'___=]===========================================
+,-----------------------..__/.'         &gt;--.______        _______.---'
+]====================&lt;==||(__)        .'          `------'
+`-----------------------`' ----.___--/
+     /       /---'                 `/
+    /_______(______________________/
+    `-------------.--------------.'
+                   \________|_.-'</pre>
+    </section>
+
+    <footer class="lcars-footer">
+      Menu-bar icons: <a href="https://github.com/adejong5/star-trek-icons">Star Trek Icons</a> by Andrew DeJong,
+      CC BY-SA 4.0 (several sourced/scaled from The Noun Project — see
+      <a href="https://github.com/gagoar/tricorder/blob/main/bar/icons/ATTRIBUTION.md">ATTRIBUTION.md</a>).
+      Sound catalog clips stream from the public
+      <a href="https://www.trekcore.com/audio/">trekcore.com archive</a> — none are hosted here.
+      LCARS structural ideas informed by <a href="https://github.com/mttaggart/lcars-css">mttaggart/lcars-css</a> and
+      <a href="https://github.com/joernweissenborn/lcars">joernweissenborn/lcars</a> (both MIT). Font: Antonio (OFL).
+      Star Trek and related marks are owned by CBS Studios / Paramount; this is a non-commercial personal project.
+      Tricorder itself is MIT licensed.
+    </footer>
+  </main>
+</div>
+</body>
+</html>

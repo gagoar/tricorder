@@ -822,10 +822,80 @@ function soundEnable(event, arg) {
   log("sound-enable " + key + " \u2192 " + (next ? "on" : "off"));
 }
 
+// src/catalog.ts
+var import_node_fs7 = require("node:fs");
+var import_node_path7 = require("node:path");
+var SOUND_EVENTS2 = ["question", "permission", "stop", "plan"];
+var ALLOWED_HOSTS = /* @__PURE__ */ new Set(["www.trekcore.com", "trekcore.com"]);
+var BYTES_PER_KB = 1024;
+var KB_PER_MB = 1024;
+var MAX_CLIP_MB = 10;
+var MAX_BYTES = MAX_CLIP_MB * KB_PER_MB * BYTES_PER_KB;
+var DEFAULT_EXT = ".mp3";
+var UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15";
+function isSoundEvent2(value) {
+  return value !== void 0 && SOUND_EVENTS2.includes(value);
+}
+function sanitizeFilename(name) {
+  const cleaned = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return cleaned === "" ? "clip" : cleaned;
+}
+function deriveFilename(url, name) {
+  const base = name !== void 0 && name !== "" ? sanitizeFilename(name) : sanitizeFilename((0, import_node_path7.basename)(url.pathname));
+  const ext = (0, import_node_path7.extname)(url.pathname) || DEFAULT_EXT;
+  return base + ext;
+}
+async function soundSet(eventArg, urlArg, nameArg) {
+  if (!isSoundEvent2(eventArg)) {
+    log("sound-set " + (eventArg ?? "?") + " \u2192 invalid event");
+    return;
+  }
+  if (urlArg === void 0 || urlArg === "") {
+    log("sound-set " + eventArg + " \u2192 missing url");
+    return;
+  }
+  let url;
+  try {
+    url = new URL(urlArg);
+  } catch {
+    log("sound-set " + eventArg + " \u2192 invalid url " + urlArg);
+    return;
+  }
+  if (url.protocol !== "https:" || !ALLOWED_HOSTS.has(url.hostname)) {
+    log("sound-set " + eventArg + " \u2192 rejected host " + url.hostname);
+    return;
+  }
+  let bytes;
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": UA, Referer: "https://www.trekcore.com/audio/" } });
+    if (!res.ok) {
+      log("sound-set " + eventArg + " \u2192 fetch failed " + res.status);
+      return;
+    }
+    bytes = await res.arrayBuffer();
+  } catch (err) {
+    log("sound-set " + eventArg + " \u2192 fetch error " + String(err));
+    return;
+  }
+  if (bytes.byteLength === 0 || bytes.byteLength > MAX_BYTES) {
+    log("sound-set " + eventArg + " \u2192 rejected size " + bytes.byteLength);
+    return;
+  }
+  ensureDir(SOUNDS_DIR);
+  const filename = deriveFilename(url, nameArg);
+  const dest = (0, import_node_path7.join)(SOUNDS_DIR, filename);
+  (0, import_node_fs7.writeFileSync)(dest, Buffer.from(bytes));
+  const cfg = loadConfig();
+  const sounds = { ...cfg.sounds, [eventArg]: { enabled: true, file: dest } };
+  saveConfig({ ...cfg, sounds });
+  log("sound-set " + eventArg + " \u2192 " + dest);
+}
+
 // src/main.ts
 var CMD_INDEX = 2;
 var ARG_INDEX = 3;
 var ARG2_INDEX = 4;
+var ARG3_INDEX = 5;
 var EXIT_ERR = 1;
 var COMMANDS = {
   statusline: () => renderStatusline(readStdin()),
@@ -836,9 +906,10 @@ var COMMANDS = {
   logs: () => showLogs(process.argv[ARG_INDEX]),
   status: () => status(),
   ack: () => ack(process.argv[ARG_INDEX]),
-  "sound-enable": () => soundEnable(process.argv[ARG_INDEX], process.argv[ARG2_INDEX])
+  "sound-enable": () => soundEnable(process.argv[ARG_INDEX], process.argv[ARG2_INDEX]),
+  "sound-set": () => soundSet(process.argv[ARG_INDEX], process.argv[ARG2_INDEX], process.argv[ARG3_INDEX])
 };
-function main() {
+async function main() {
   const cmd = process.argv[CMD_INDEX] ?? "";
   const run = COMMANDS[cmd];
   if (run === void 0) {
@@ -846,9 +917,9 @@ function main() {
     process.exit(EXIT_ERR);
   }
   try {
-    run();
+    await run();
   } catch (err) {
     process.stderr.write("tricorder: " + String(err) + "\n");
   }
 }
-main();
+void main();

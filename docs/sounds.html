@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tricorder — Sound Catalog</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="lcars-page">
+  <div class="lcars-topbar">
+    <span class="lcars-heading">Tricorder</span>
+    <nav>
+      <a href="index.html">Bridge</a>
+      <a href="sounds.html">Sound Catalog</a>
+      <a href="https://github.com/gagoar/tricorder">GitHub</a>
+    </nav>
+  </div>
+  <div class="lcars-sidebar">
+    <a class="lcars-block" href="index.html">Bridge</a>
+    <a class="lcars-block" href="index.html#install">Install</a>
+    <a class="lcars-block" href="sounds.html">Audio Bay</a>
+    <a class="lcars-block" href="https://github.com/gagoar/tricorder/blob/main/plugin/README.md">Docs</a>
+    <a class="lcars-block" href="https://github.com/gagoar/tricorder">Source</a>
+  </div>
+  <main class="lcars-main">
+    <div class="lcars-section-header"><span class="lcars-heading">Audio Bay — Sound Catalog</span></div>
+    <p>
+      Every clip below streams straight from
+      <a href="https://www.trekcore.com/audio/" target="_blank" rel="noopener">trekcore.com</a>'s
+      public audio archive — <strong>nothing here is hosted or bundled by this repo.</strong>
+      Preview a clip, then click "Use for…" to have your own local Tricorder fetch it
+      into <code>~/.claude/tricorder/sounds/</code> and assign it to that event. This
+      only works if Tricorder's menu-bar app is running on your Mac and registered
+      for the <code>tricorder://</code> URL scheme — otherwise the link does nothing.
+    </p>
+    <div id="catalog"></div>
+    <footer class="lcars-footer">
+      Clip source: <a href="https://www.trekcore.com/audio/" target="_blank" rel="noopener">trekcore.com</a>.
+      Star Trek and related marks are owned by CBS Studios / Paramount; this page links to a public
+      fan archive for personal, non-commercial use and distributes no audio itself.
+    </footer>
+  </main>
+</div>
+
+<script>
+const EVENTS = [
+  { key: "question", label: "Question" },
+  { key: "permission", label: "Permission" },
+  { key: "plan", label: "Plan" },
+  { key: "stop", label: "Done" },
+];
+const CATEGORY_LABELS = {
+  "computer-voice": "Computer Voice",
+  "alert": "Red / Yellow Alert",
+  "transporter": "Transporter",
+  "weapon": "Weapons",
+  "door": "Doors & Turbolift",
+  "iconic": "Iconic Lines",
+};
+
+function humanSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  const kb = bytes / 1024;
+  if (kb < 1024) return Math.round(kb) + " KB";
+  return (kb / 1024).toFixed(1) + " MB";
+}
+
+function soundSetUrl(event, clip) {
+  const params = new URLSearchParams({ event, url: clip.url, name: clip.name });
+  return "tricorder://sound-set?" + params.toString();
+}
+
+function renderClip(clip) {
+  const card = document.createElement("div");
+  card.className = "lcars-panel";
+  card.style.marginBottom = "16px";
+
+  const title = document.createElement("div");
+  title.className = "lcars-heading";
+  title.style.fontSize = "1rem";
+  title.style.marginBottom = "6px";
+  title.textContent = clip.name;
+  card.appendChild(title);
+
+  const meta = document.createElement("div");
+  meta.innerHTML = '<span class="lcars-tag">' + humanSize(clip.bytes) + "</span>";
+  meta.style.marginBottom = "10px";
+  card.appendChild(meta);
+
+  const audio = document.createElement("audio");
+  audio.controls = true;
+  audio.preload = "none";
+  audio.src = clip.url;
+  audio.style.width = "100%";
+  audio.style.marginBottom = "12px";
+  card.appendChild(audio);
+
+  const buttons = document.createElement("div");
+  buttons.style.display = "flex";
+  buttons.style.flexWrap = "wrap";
+  buttons.style.gap = "8px";
+  EVENTS.forEach((ev) => {
+    const a = document.createElement("a");
+    a.className = "lcars-pill small secondary";
+    a.href = soundSetUrl(ev.key, clip);
+    a.textContent = "Use for " + ev.label;
+    buttons.appendChild(a);
+  });
+  card.appendChild(buttons);
+
+  return card;
+}
+
+async function main() {
+  const root = document.getElementById("catalog");
+  let data;
+  try {
+    const res = await fetch("catalog.json");
+    data = await res.json();
+  } catch (err) {
+    root.textContent = "Could not load the catalog (" + err + "). If you're viewing this from a local file:// path, serve the docs/ folder with a local static server instead.";
+    return;
+  }
+  const byCategory = {};
+  data.clips.forEach((clip) => {
+    (byCategory[clip.category] = byCategory[clip.category] || []).push(clip);
+  });
+  Object.keys(CATEGORY_LABELS).forEach((cat) => {
+    const clips = byCategory[cat];
+    if (!clips) return;
+    const section = document.createElement("section");
+    const heading = document.createElement("h2");
+    heading.className = "lcars-heading";
+    heading.style.color = "var(--tanoi)";
+    heading.style.margin = "24px 0 12px";
+    heading.textContent = CATEGORY_LABELS[cat];
+    section.appendChild(heading);
+    clips.forEach((clip) => section.appendChild(renderClip(clip)));
+    root.appendChild(section);
+  });
+}
+main();
+</script>
+</body>
+</html>

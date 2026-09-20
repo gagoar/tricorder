@@ -442,7 +442,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if let path = enc.removingPercentEncoding {
                 NSWorkspace.shared.open(URL(fileURLWithPath: path))
             }
+        } else if url.hasPrefix("tricorder://sound-set") {
+            handleSoundSet(url)
         }
+    }
+
+    // tricorder://sound-set?event=question&url=https://...&name=Engage — from
+    // the catalog page on the site. Validation (event key, host allowlist) lives
+    // in the `sound-set` subcommand; this just passes the three params through.
+    func handleSoundSet(_ url: String) {
+        guard let comps = URLComponents(string: url) else { return }
+        let items = comps.queryItems ?? []
+        let event = items.first(where: { $0.name == "event" })?.value ?? ""
+        let soundUrl = items.first(where: { $0.name == "url" })?.value ?? ""
+        let name = items.first(where: { $0.name == "name" })?.value ?? ""
+        guard !event.isEmpty, !soundUrl.isEmpty else { return }
+        runTricorder(["sound-set", event, soundUrl, name])
+        refresh()
     }
 }
 
