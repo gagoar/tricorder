@@ -1,0 +1,7 @@
+node_modules/
+build/
+dist/
+*.blob
+plugin/handler/Tricorder.app/
+plugin/bar/TricorderBar.app/
+.DS_Store

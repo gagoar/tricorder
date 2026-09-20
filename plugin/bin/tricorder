@@ -1,0 +1,854 @@
+#!/usr/bin/env node
+"use strict";
+
+// src/stdin.ts
+var import_node_fs = require("node:fs");
+var STDIN_FD = 0;
+function readStdin() {
+  try {
+    return (0, import_node_fs.readFileSync)(STDIN_FD, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+// src/statusline.ts
+var import_node_path3 = require("node:path");
+
+// src/config.ts
+var import_node_os = require("node:os");
+var import_node_path = require("node:path");
+var import_node_fs2 = require("node:fs");
+var JSON_INDENT = 2;
+var DATA_DIR = (0, import_node_path.join)((0, import_node_os.homedir)(), ".claude", "tricorder");
+var CONFIG_PATH = (0, import_node_path.join)(DATA_DIR, "config.json");
+var STATE_DIR = (0, import_node_path.join)(DATA_DIR, "state");
+var SOUNDS_DIR = (0, import_node_path.join)(DATA_DIR, "sounds");
+var QUESTION_SOUND = (0, import_node_path.join)(SOUNDS_DIR, "please-specify.mp3");
+var PERMISSION_SOUND = (0, import_node_path.join)(SOUNDS_DIR, "security-authorisation.mp3");
+var STOP_SOUND = (0, import_node_path.join)(SOUNDS_DIR, "transporter-complete.mp3");
+var PLAN_SOUND = (0, import_node_path.join)(SOUNDS_DIR, "engage.mp3");
+var DEFAULT_CONFIG = {
+  // Sounds off by default; turn them on from the menu-bar app.
+  muted: true,
+  sounds: {
+    // "Please specify how you would like to proceed" — plays when Claude waits
+    // on you (Notification / AskUserQuestion).
+    question: { enabled: true, file: QUESTION_SOUND },
+    // "Security authorisation required" — a real permission prompt only appears
+    // in manual mode; under auto + skipAutoPermissionPrompt it never fires, and
+    // when it did it doubled up on questions. Off by default.
+    permission: { enabled: false, file: PERMISSION_SOUND },
+    // Transporter chime — plays when Claude finishes a turn (Stop). tars-voice
+    // also speaks on Stop; disable one if the pair is too much.
+    stop: { enabled: true, file: STOP_SOUND },
+    // "Engage" — plays when a plan is presented (ExitPlanMode / EnterPlanMode).
+    plan: { enabled: true, file: PLAN_SOUND }
+  }
+};
+function ensureDir(dir) {
+  (0, import_node_fs2.mkdirSync)(dir, { recursive: true });
+}
+function serialize(value) {
+  return JSON.stringify(value, null, JSON_INDENT) + "\n";
+}
+function loadConfig() {
+  ensureDir(DATA_DIR);
+  if (!(0, import_node_fs2.existsSync)(CONFIG_PATH)) {
+    (0, import_node_fs2.writeFileSync)(CONFIG_PATH, serialize(DEFAULT_CONFIG));
+    return structuredClone(DEFAULT_CONFIG);
+  }
+  try {
+    const raw = JSON.parse((0, import_node_fs2.readFileSync)(CONFIG_PATH, "utf8"));
+    return mergeConfig(DEFAULT_CONFIG, raw);
+  } catch {
+    return structuredClone(DEFAULT_CONFIG);
+  }
+}
+function mergeConfig(base, override) {
+  const events = Object.keys(base.sounds);
+  const sounds = Object.fromEntries(
+    events.map((key) => {
+      const o = override.sounds?.[key];
+      return [key, o ? { ...base.sounds[key], ...o } : base.sounds[key]];
+    })
+  );
+  return {
+    muted: typeof override.muted === "boolean" ? override.muted : base.muted,
+    sounds
+  };
+}
+function saveConfig(cfg) {
+  ensureDir(DATA_DIR);
+  (0, import_node_fs2.writeFileSync)(CONFIG_PATH, serialize(cfg));
+}
+
+// src/state.ts
+var import_node_path2 = require("node:path");
+var import_node_fs3 = require("node:fs");
+var JSON_EXT = ".json";
+var PRS_FILE = "prs.json";
+var PLAN_FILE = "plan.txt";
+var MODEL_FILE = "model.txt";
+var SUBAGENTS_DIR = "subagents";
+function sanitize(value) {
+  return value.replace(/[^A-Za-z0-9._-]/g, "_");
+}
+function sessionDir(sessionId) {
+  return (0, import_node_path2.join)(STATE_DIR, sanitize(sessionId));
+}
+function subagentsDir(sessionId) {
+  return (0, import_node_path2.join)(sessionDir(sessionId), SUBAGENTS_DIR);
+}
+function readJSON(path, fallback) {
+  try {
+    return JSON.parse((0, import_node_fs3.readFileSync)(path, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+function readPRs(sessionId) {
+  return readJSON((0, import_node_path2.join)(sessionDir(sessionId), PRS_FILE), []);
+}
+function addPR(sessionId, pr) {
+  const dir = sessionDir(sessionId);
+  ensureDir(dir);
+  const prs = readPRs(sessionId);
+  const already = prs.some(
+    (p) => p.url === pr.url || pr.number !== null && p.number === pr.number
+  );
+  if (already) return;
+  (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, PRS_FILE), serialize([...prs, pr]));
+}
+function addSubagent(sessionId, id, data) {
+  const dir = subagentsDir(sessionId);
+  ensureDir(dir);
+  (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, sanitize(id) + JSON_EXT), serialize(data));
+}
+function removeSubagent(sessionId, id) {
+  try {
+    (0, import_node_fs3.rmSync)((0, import_node_path2.join)(subagentsDir(sessionId), sanitize(id) + JSON_EXT), { force: true });
+  } catch {
+  }
+}
+function listSubagents(sessionId) {
+  const dir = subagentsDir(sessionId);
+  if (!(0, import_node_fs3.existsSync)(dir)) return [];
+  return (0, import_node_fs3.readdirSync)(dir).filter((f) => f.endsWith(JSON_EXT)).map((f) => readJSON((0, import_node_path2.join)(dir, f), null)).filter((s) => s !== null).sort((a, b) => a.startedAt - b.startedAt);
+}
+function setPlan(sessionId, planPath) {
+  const dir = sessionDir(sessionId);
+  ensureDir(dir);
+  (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, PLAN_FILE), planPath + "\n");
+}
+function getPlan(sessionId) {
+  try {
+    return (0, import_node_fs3.readFileSync)((0, import_node_path2.join)(sessionDir(sessionId), PLAN_FILE), "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+function setModel(sessionId, model) {
+  const dir = sessionDir(sessionId);
+  ensureDir(dir);
+  (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, MODEL_FILE), model + "\n");
+}
+function getModel(sessionId) {
+  try {
+    return (0, import_node_fs3.readFileSync)((0, import_node_path2.join)(sessionDir(sessionId), MODEL_FILE), "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+var ATTENTION_FILE = "attention.json";
+var LABEL_FILE = "label.txt";
+var ITERM_FILE = "iterm.txt";
+var CWD_FILE = "cwd.txt";
+var DEBUG_DIR = "_debug";
+function writeText(sessionId, file, value) {
+  const dir = sessionDir(sessionId);
+  ensureDir(dir);
+  (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, file), value + "\n");
+}
+function readText(sessionId, file) {
+  try {
+    return (0, import_node_fs3.readFileSync)((0, import_node_path2.join)(sessionDir(sessionId), file), "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+function setAttention(sessionId, state) {
+  const dir = sessionDir(sessionId);
+  ensureDir(dir);
+  (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, ATTENTION_FILE), serialize({ state, at: Date.now() }));
+}
+function getAttention(sessionId) {
+  return readJSON((0, import_node_path2.join)(sessionDir(sessionId), ATTENTION_FILE), null);
+}
+function setLabel(sessionId, label) {
+  writeText(sessionId, LABEL_FILE, label);
+}
+function getLabel(sessionId) {
+  return readText(sessionId, LABEL_FILE);
+}
+function setItermId(sessionId, id) {
+  writeText(sessionId, ITERM_FILE, id);
+}
+function getItermId(sessionId) {
+  return readText(sessionId, ITERM_FILE);
+}
+function setCwd(sessionId, cwd) {
+  writeText(sessionId, CWD_FILE, cwd);
+}
+function removeSession(sessionId) {
+  try {
+    (0, import_node_fs3.rmSync)(sessionDir(sessionId), { recursive: true, force: true });
+  } catch {
+  }
+}
+function listSessions() {
+  try {
+    return (0, import_node_fs3.readdirSync)(STATE_DIR, { withFileTypes: true }).filter((e) => e.isDirectory() && e.name !== DEBUG_DIR).map((e) => e.name);
+  } catch {
+    return [];
+  }
+}
+var INTRO_FILE = "intro.txt";
+function introElapsed(sessionId) {
+  const path = (0, import_node_path2.join)(sessionDir(sessionId), INTRO_FILE);
+  try {
+    const started = Number((0, import_node_fs3.readFileSync)(path, "utf8").trim());
+    if (Number.isFinite(started)) return Date.now() - started;
+  } catch {
+  }
+  const dir = sessionDir(sessionId);
+  ensureDir(dir);
+  try {
+    (0, import_node_fs3.writeFileSync)(path, String(Date.now()));
+  } catch {
+  }
+  return 0;
+}
+function debugDump(name, raw) {
+  try {
+    const dir = (0, import_node_path2.join)(STATE_DIR, "_debug");
+    ensureDir(dir);
+    (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, name + JSON_EXT), raw);
+  } catch {
+  }
+}
+
+// src/statusline.ts
+var ESC = "\x1B";
+var BEL = "\x07";
+var RESET = ESC + "[0m";
+var RED = 91;
+var YELLOW = 93;
+var GREEN = 32;
+var CYAN = 96;
+var DIM = 90;
+function sgr(code, text) {
+  return ESC + "[" + code + "m" + text + RESET;
+}
+function osc8(url, text) {
+  return ESC + "]8;;" + url + BEL + text + ESC + "]8;;" + BEL;
+}
+var OPEN_SCHEME = "tricorder://open?path=";
+function openLink(path, text) {
+  return osc8(OPEN_SCHEME + encodeURIComponent(path), text);
+}
+var OSC8_RE = /\x1b\]8;;[^\x07]*\x07/g;
+var SGR_RE = /\x1b\[[0-9;]*m/g;
+var VS16 = 65039;
+var WIDE_MIN = 126976;
+var WIDE_WIDTH = 2;
+var NARROW_WIDTH = 1;
+function charWidth(ch) {
+  const cp = ch.codePointAt(0) ?? 0;
+  if (cp === VS16) return 0;
+  return cp >= WIDE_MIN ? WIDE_WIDTH : NARROW_WIDTH;
+}
+function visWidth(s) {
+  const clean = s.replace(OSC8_RE, "").replace(SGR_RE, "");
+  return [...clean].reduce((w, ch) => w + charWidth(ch), 0);
+}
+var ICON_MUTED = "\u{1F507}";
+var ICON_TREE = "\u{1F333}";
+var ICON_HELMET = "\u{1FA96}";
+var ICON_MAP = "\u{1F5FA}\uFE0F";
+var ICON_CTX = "\u{1F50B}";
+var ICON_ROBOT = "\u{1F916}";
+var SEP = " \xB7 ";
+var MARGIN = 1;
+var MINI_SHIP = "o\u2261\u2261\u2261>";
+var ANIM_MS = 4e3;
+var DEFAULT_WIDTH = 80;
+var PCT_MAX = 100;
+var CTX_RED_PCT = 90;
+var CTX_YELLOW_PCT = 70;
+function usedTokens(cw) {
+  const u = cw.current_usage;
+  if (u) {
+    return (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+  }
+  return cw.total_input_tokens ?? 0;
+}
+function computePct(cw, size, used) {
+  if (typeof cw.used_percentage === "number") return cw.used_percentage;
+  if (size > 0) return used / size * PCT_MAX;
+  return 0;
+}
+function ctxColor(pct) {
+  if (pct >= CTX_RED_PCT) return RED;
+  if (pct >= CTX_YELLOW_PCT) return YELLOW;
+  return GREEN;
+}
+function contextSegment(cw) {
+  if (!cw) return null;
+  const size = cw.context_window_size ?? 0;
+  const pctInt = Math.round(computePct(cw, size, usedTokens(cw)));
+  return ICON_CTX + " " + sgr(ctxColor(pctInt), pctInt + "%");
+}
+function worktreeSegment(p) {
+  const wt = p.worktree;
+  const path = wt?.path ?? p.workspace?.current_dir ?? p.cwd ?? "";
+  if (path === "") return null;
+  const label = wt?.branch ?? wt?.name ?? ((0, import_node_path3.basename)(path) || path);
+  return openLink(path, ICON_TREE + " " + label);
+}
+function terminalWidth() {
+  return Number(process.env.COLUMNS) || (process.stdout.columns ?? 0);
+}
+function line1(p, session) {
+  const muted = loadConfig().muted;
+  const mid = [worktreeSegment(p), contextSegment(p.context_window), p.model?.display_name ?? null].filter((s) => s !== null && s !== "").join(SEP);
+  const left = muted ? ICON_MUTED + " " + mid : mid;
+  const plan = session === "" ? null : getPlan(session);
+  if (plan === null) return left;
+  const right = openLink(plan, ICON_MAP + " " + sgr(DIM, "plan"));
+  const width = terminalWidth();
+  const gap = width > 0 ? Math.max(MARGIN, width - visWidth(left) - visWidth(right) - MARGIN) : MARGIN;
+  return left + " ".repeat(gap) + right;
+}
+function prLine(session) {
+  const prs = readPRs(session);
+  if (prs.length === 0) return null;
+  const links = prs.map((pr) => osc8(pr.url, sgr(CYAN, pr.number === null ? "PR" : "#" + pr.number)));
+  return ICON_HELMET + " " + links.join("  ");
+}
+function subagentLine(session) {
+  const subs = listSubagents(session);
+  if (subs.length === 0) return null;
+  const parts = subs.map((s) => s.type + " " + sgr(DIM, s.model));
+  return ICON_ROBOT + " " + parts.join(", ");
+}
+function introFrame(elapsed) {
+  const width = terminalWidth() || DEFAULT_WIDTH;
+  const total = width + MINI_SHIP.length;
+  const x = Math.round(elapsed / ANIM_MS * total) - MINI_SHIP.length;
+  const s = x >= 0 ? " ".repeat(x) + MINI_SHIP : MINI_SHIP.slice(-x);
+  return sgr(CYAN, s.slice(0, width));
+}
+function parse(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+function renderStatusline(raw) {
+  const payload = parse(raw);
+  if (payload === null) return;
+  const session = payload.session_id ?? "";
+  const hasSession = session !== "";
+  const model = payload.model?.display_name;
+  if (hasSession && model !== void 0 && model !== "") setModel(session, model);
+  if (hasSession) {
+    const wt = payload.worktree;
+    const path = wt?.path ?? payload.workspace?.current_dir ?? payload.cwd ?? "";
+    setLabel(session, wt?.branch ?? wt?.name ?? ((0, import_node_path3.basename)(path) || session));
+    const iterm = process.env.ITERM_SESSION_ID;
+    if (iterm !== void 0 && iterm !== "") setItermId(session, iterm);
+  }
+  if (hasSession) {
+    const el = introElapsed(session);
+    if (el < ANIM_MS) {
+      process.stdout.write(introFrame(el) + "\n");
+      return;
+    }
+  }
+  const lines = [
+    line1(payload, session),
+    hasSession ? prLine(session) : null,
+    hasSession ? subagentLine(session) : null
+  ].filter((l) => l !== null && l !== "");
+  process.stdout.write(lines.join("\n") + "\n");
+}
+
+// src/capture.ts
+var import_node_buffer = require("node:buffer");
+var import_node_path5 = require("node:path");
+
+// src/iterm.ts
+var import_node_child_process = require("node:child_process");
+var IT2 = "/Applications/iTerm.app/Contents/Resources/utilities/it2";
+var IT2_TIMEOUT_MS = 2e3;
+var VAR_PREFIX = "user.";
+var NEXT_CHAR = 1;
+function sessionGuid() {
+  const id = process.env.ITERM_SESSION_ID ?? process.env.TERM_SESSION_ID;
+  if (!id) return null;
+  const colon = id.lastIndexOf(":");
+  return colon < 0 ? id : id.slice(colon + NEXT_CHAR);
+}
+function setVar(name, value) {
+  const guid = sessionGuid();
+  if (guid === null) return;
+  try {
+    (0, import_node_child_process.execFileSync)(
+      IT2,
+      ["session", "set-var", VAR_PREFIX + name, value, "--session", guid],
+      { stdio: "ignore", timeout: IT2_TIMEOUT_MS }
+    );
+  } catch {
+  }
+}
+function publish(vars) {
+  Object.entries(vars).forEach(([name, value]) => {
+    setVar(name, value);
+  });
+}
+
+// src/log.ts
+var import_node_fs4 = require("node:fs");
+var import_node_path4 = require("node:path");
+var LOG_PATH = (0, import_node_path4.join)(DATA_DIR, "tricorder.log");
+var TAIL_DEFAULT = 40;
+var MAX_LOG_BYTES = 524288;
+var KEEP_LINES = 2e3;
+function stamp() {
+  return (/* @__PURE__ */ new Date()).toISOString();
+}
+function log(line) {
+  try {
+    ensureDir(DATA_DIR);
+    if ((0, import_node_fs4.existsSync)(LOG_PATH) && (0, import_node_fs4.statSync)(LOG_PATH).size > MAX_LOG_BYTES) {
+      const kept = (0, import_node_fs4.readFileSync)(LOG_PATH, "utf8").split("\n").slice(-KEEP_LINES).join("\n");
+      (0, import_node_fs4.writeFileSync)(LOG_PATH, kept);
+    }
+    (0, import_node_fs4.appendFileSync)(LOG_PATH, stamp() + " " + line + "\n");
+  } catch {
+  }
+}
+function showLogs(arg) {
+  if (arg === "clear") {
+    try {
+      (0, import_node_fs4.writeFileSync)(LOG_PATH, "");
+    } catch {
+    }
+    process.stdout.write("cleared " + LOG_PATH + "\n");
+    return;
+  }
+  const n = Number(arg) || TAIL_DEFAULT;
+  try {
+    const lines = (0, import_node_fs4.readFileSync)(LOG_PATH, "utf8").split("\n").filter((l) => l !== "");
+    process.stdout.write(lines.slice(-n).join("\n") + "\n");
+  } catch {
+    process.stdout.write("(no log yet at " + LOG_PATH + ")\n");
+  }
+}
+
+// src/capture.ts
+var DESC_MAX = 60;
+var HASH_LEN = 24;
+var PLAN_PATH_RE = /\/\.claude\/plans\/[^/]+\.md$/;
+var PR_URL_RE = /https?:\/\/[^\s"']*\/pull\/\d+/;
+var PR_NUM_RE = /\/pull\/(\d+)/;
+var GH_PR_CREATE_RE = /\bgh\b[\s\S]*\bpr\b[\s\S]*\bcreate\b/;
+var GH_PR_TOOL = "mcp__github__create_pull_request";
+var ATTENTION_TOOLS = /* @__PURE__ */ new Set(["AskUserQuestion", "ExitPlanMode", "EnterPlanMode"]);
+var NOOP_REACTIONS = /* @__PURE__ */ new Set([
+  "ignored",
+  "not a plan path",
+  "bash, not a pr create",
+  "no pr url in response"
+]);
+function str(value) {
+  if (typeof value === "string") return value;
+  if (value === void 0 || value === null) return "";
+  return String(value);
+}
+function subagentId(input) {
+  if (input.tool_use_id) return input.tool_use_id;
+  const ti = input.tool_input ?? {};
+  const seed = str(ti.subagent_type) + "|" + str(ti.description);
+  return "d_" + import_node_buffer.Buffer.from(seed).toString("hex").slice(0, HASH_LEN);
+}
+function handleSubagentStart(session, input) {
+  const id = input.agent_id ?? subagentId(input);
+  const type = str(input.agent_type) || "agent";
+  const model = str(input.model) || getModel(session) || "default";
+  addSubagent(session, id, {
+    type,
+    desc: (str(input.description) || str(input.tool_input?.description)).slice(0, DESC_MAX),
+    model,
+    startedAt: Date.now()
+  });
+  return "track " + type + " \xB7 " + model;
+}
+function handleSubagentEnd(session, input) {
+  const id = input.agent_id ?? subagentId(input);
+  removeSubagent(session, id);
+  return "untrack " + id;
+}
+function responseText(resp) {
+  if (resp === void 0 || resp === null) return "";
+  if (typeof resp === "string") return resp;
+  try {
+    return JSON.stringify(resp);
+  } catch {
+    return String(resp);
+  }
+}
+function extractPR(text) {
+  const url = text.match(PR_URL_RE)?.[0];
+  if (url === void 0) return null;
+  const num = url.match(PR_NUM_RE)?.[1];
+  return { number: num === void 0 ? null : Number(num), url };
+}
+function handlePR(session, input) {
+  const tool = str(input.tool_name);
+  if (tool === "Bash" && !GH_PR_CREATE_RE.test(str(input.tool_input?.command))) return "bash, not a pr create";
+  const pr = extractPR(responseText(input.tool_response));
+  if (pr === null) return "no pr url in response";
+  addPR(session, pr);
+  return "pr " + pr.url;
+}
+function handlePlan(session, input) {
+  const fp = str(input.tool_input?.file_path);
+  if (!PLAN_PATH_RE.test(fp)) return "not a plan path";
+  setPlan(session, fp);
+  return "plan " + (0, import_node_path5.basename)(fp);
+}
+function route(session, input) {
+  const event = str(input.hook_event_name);
+  const tool = str(input.tool_name);
+  const isPrTool = tool === GH_PR_TOOL || tool === "Bash";
+  if (event === "PreToolUse" && ATTENTION_TOOLS.has(tool)) {
+    setAttention(session, "question");
+    return "attention question";
+  }
+  if (event === "PermissionRequest") {
+    setAttention(session, "security");
+    return "attention security";
+  }
+  if (event === "Stop") {
+    setAttention(session, "done");
+    return "attention done";
+  }
+  if (event === "UserPromptSubmit") {
+    setAttention(session, "working");
+    return "attention working";
+  }
+  if (event === "SessionEnd") {
+    removeSession(session);
+    return "session removed";
+  }
+  const isActivity = event === "PreToolUse" || event === "PostToolUse" || event === "SubagentStart" || event === "SubagentStop";
+  if (isActivity) setAttention(session, "working");
+  if (event === "SubagentStart") return handleSubagentStart(session, input);
+  if (event === "SubagentStop") return handleSubagentEnd(session, input);
+  if (event === "PostToolUse" && isPrTool) return handlePR(session, input);
+  if (event === "PreToolUse" && (tool === "Write" || tool === "Edit")) return handlePlan(session, input);
+  return "ignored";
+}
+function publishState(session) {
+  const prs = readPRs(session);
+  const subs = listSubagents(session);
+  const plan = getPlan(session);
+  publish({
+    tricorder_prs: prs.map((p) => p.number === null ? "PR" : "#" + p.number).join(" "),
+    tricorder_subagents: subs.length === 0 ? "" : String(subs.length),
+    tricorder_plan: plan === null ? "" : (0, import_node_path5.basename)(plan)
+  });
+}
+function parse2(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+function capture(raw) {
+  const input = parse2(raw);
+  if (!input) return;
+  if (process.env.TRICORDER_DEBUG !== void 0) {
+    debugDump(str(input.hook_event_name) || "unknown", raw);
+  }
+  const session = input.session_id;
+  if (session === void 0 || session === "") return;
+  if (str(input.hook_event_name) !== "SessionEnd") {
+    const iterm = process.env.ITERM_SESSION_ID;
+    if (iterm !== void 0 && iterm !== "") setItermId(session, iterm);
+    if (input.cwd !== void 0 && input.cwd !== "") setCwd(session, input.cwd);
+  }
+  const reaction = route(session, input);
+  if (!NOOP_REACTIONS.has(reaction)) {
+    const tool = str(input.tool_name);
+    log("capture " + str(input.hook_event_name) + (tool !== "" ? " [" + tool + "]" : "") + " \u2192 " + reaction);
+  }
+  publishState(session);
+}
+
+// src/sound.ts
+var import_node_child_process2 = require("node:child_process");
+var import_node_fs5 = require("node:fs");
+var import_node_path6 = require("node:path");
+var AFPLAY = "/usr/bin/afplay";
+var VALID_EVENTS = ["question", "permission", "stop", "plan"];
+var DEBOUNCE_MS = 1500;
+var LAST_SOUND_FILE = (0, import_node_path6.join)(DATA_DIR, ".last-sound");
+function isSoundEvent(value) {
+  return value !== void 0 && VALID_EVENTS.includes(value);
+}
+function ensureBundledSounds() {
+  const root = process.env.CLAUDE_PLUGIN_ROOT;
+  if (root === void 0) return;
+  const from = (0, import_node_path6.join)(root, "sounds");
+  if (!(0, import_node_fs5.existsSync)(from)) return;
+  ensureDir(SOUNDS_DIR);
+  (0, import_node_fs5.readdirSync)(from).filter((name) => !(0, import_node_fs5.existsSync)((0, import_node_path6.join)(SOUNDS_DIR, name))).forEach((name) => {
+    (0, import_node_fs5.copyFileSync)((0, import_node_path6.join)(from, name), (0, import_node_path6.join)(SOUNDS_DIR, name));
+  });
+}
+function debounced() {
+  const now = Date.now();
+  try {
+    const last = Number((0, import_node_fs5.readFileSync)(LAST_SOUND_FILE, "utf8").trim());
+    if (Number.isFinite(last) && now - last < DEBOUNCE_MS) return true;
+  } catch {
+  }
+  try {
+    ensureDir(DATA_DIR);
+    (0, import_node_fs5.writeFileSync)(LAST_SOUND_FILE, String(now));
+  } catch {
+  }
+  return false;
+}
+function playSound(eventArg) {
+  if (!isSoundEvent(eventArg)) {
+    log("sound " + (eventArg ?? "?") + " \u2192 invalid event");
+    return;
+  }
+  ensureBundledSounds();
+  const cfg = loadConfig();
+  if (cfg.muted) {
+    log("sound " + eventArg + " \u2192 muted, skip");
+    return;
+  }
+  const entry = cfg.sounds[eventArg];
+  if (!entry.enabled) {
+    log("sound " + eventArg + " \u2192 disabled, skip");
+    return;
+  }
+  if (!(0, import_node_fs5.existsSync)(entry.file)) {
+    log("sound " + eventArg + " \u2192 missing file " + entry.file);
+    return;
+  }
+  if (debounced()) {
+    log("sound " + eventArg + " \u2192 debounced, skip");
+    return;
+  }
+  log("sound " + eventArg + " \u2192 play " + entry.file);
+  const child = (0, import_node_child_process2.spawn)(AFPLAY, [entry.file], { stdio: "ignore", detached: true });
+  child.on("error", () => {
+  });
+  child.unref();
+}
+
+// src/mute.ts
+var MUTED_VAR = "tricorder_muted";
+var MUTED_ON = "1";
+var MUTED_OFF = "0";
+var MUTE_ACTIONS = {
+  on: () => true,
+  off: () => false,
+  toggle: (current) => !current
+};
+function nextMuted(current, arg) {
+  const key = (arg ?? "toggle").toLowerCase();
+  const action = MUTE_ACTIONS[key] ?? MUTE_ACTIONS.toggle;
+  return action(current);
+}
+function mute(arg) {
+  const cfg = loadConfig();
+  const muted = nextMuted(cfg.muted, arg);
+  saveConfig({ ...cfg, muted });
+  setVar(MUTED_VAR, muted ? MUTED_ON : MUTED_OFF);
+  log("mute " + (arg ?? "toggle") + " \u2192 " + (muted ? "muted" : "unmuted"));
+  process.stdout.write(muted ? "muted\n" : "unmuted\n");
+}
+
+// src/warp.ts
+var import_node_fs6 = require("node:fs");
+var SHIP = [
+  "                                                  ______",
+  "                                     ___.--------'------`---------.____",
+  "                               _.---'----------------------------------`---.__",
+  "                             .'___=]===========================================",
+  ",-----------------------..__/.'         >--.______        _______.---'",
+  "]====================<==||(__)        .'          `------'",
+  "`-----------------------`' ----.___--/",
+  "     /       /---'                 `/",
+  "    /_______(______________________/",
+  "    `-------------.--------------.'",
+  "                   \\________|_.-'"
+];
+var DEFAULT_WIDTH2 = 80;
+var STEP = 3;
+var FRAME_MS = 22;
+var I32_BYTES = 4;
+var STDOUT_FD = 1;
+var ESC2 = "\x1B";
+var HIDE_CURSOR = ESC2 + "[?25l";
+var SHOW_CURSOR = ESC2 + "[?25h";
+var CLEAR_LINE = ESC2 + "[2K";
+function sleep(ms) {
+  const shared = new Int32Array(new SharedArrayBuffer(I32_BYTES));
+  Atomics.wait(shared, 0, 0, ms);
+}
+function termWidth() {
+  return Number(process.env.COLUMNS) || DEFAULT_WIDTH2;
+}
+function shiftLine(line, offset, cols) {
+  const s = offset >= 0 ? " ".repeat(offset) + line : line.slice(-offset);
+  return s.slice(0, cols);
+}
+function up(rows) {
+  return ESC2 + "[" + rows + "A";
+}
+function frame(offset, cols, rows) {
+  const body = SHIP.map((line) => "\r" + CLEAR_LINE + shiftLine(line, offset, cols)).join("\n");
+  return up(rows) + body + "\n";
+}
+function warp() {
+  log("warp \u2192 flyby");
+  const useStdout = process.env.TRICORDER_WARP_STDOUT !== void 0;
+  let fd;
+  if (useStdout) {
+    fd = STDOUT_FD;
+  } else {
+    try {
+      fd = (0, import_node_fs6.openSync)("/dev/tty", "w");
+    } catch {
+      return;
+    }
+  }
+  const cols = termWidth();
+  const rows = SHIP.length;
+  const shipWidth = Math.max(...SHIP.map((line) => line.length));
+  const frameCount = Math.ceil((cols + shipWidth) / STEP);
+  const offsets = Array.from({ length: frameCount }, (_, i) => -shipWidth + i * STEP);
+  try {
+    (0, import_node_fs6.writeSync)(fd, HIDE_CURSOR + "\n".repeat(rows));
+    offsets.forEach((offset) => {
+      (0, import_node_fs6.writeSync)(fd, frame(offset, cols, rows));
+      sleep(FRAME_MS);
+    });
+    const blanks = SHIP.map(() => "\r" + CLEAR_LINE).join("\n") + "\n";
+    (0, import_node_fs6.writeSync)(fd, up(rows) + blanks + SHOW_CURSOR);
+  } catch {
+  } finally {
+    if (!useStdout) {
+      try {
+        (0, import_node_fs6.closeSync)(fd);
+      } catch {
+      }
+    }
+  }
+}
+
+// src/status.ts
+var HOURS_STALE = 6;
+var MS_PER_HOUR = 36e5;
+var STALE_MS = HOURS_STALE * MS_PER_HOUR;
+var LABEL_FALLBACK_LEN = 8;
+var SOUND_EVENTS = ["question", "permission", "stop", "plan"];
+function sessionStatus(id, now) {
+  const a = getAttention(id);
+  if (a === null || now - a.at >= STALE_MS) return null;
+  return {
+    id,
+    label: getLabel(id) ?? id.slice(0, LABEL_FALLBACK_LEN),
+    state: a.state,
+    at: a.at,
+    iterm: getItermId(id) ?? "",
+    agents: listSubagents(id).length
+  };
+}
+function status() {
+  const now = Date.now();
+  const cfg = loadConfig();
+  const sessions = listSessions().map((id) => sessionStatus(id, now)).filter((s) => s !== null);
+  const payload = {
+    muted: cfg.muted,
+    sounds: {
+      question: cfg.sounds.question.enabled,
+      permission: cfg.sounds.permission.enabled,
+      plan: cfg.sounds.plan.enabled,
+      stop: cfg.sounds.stop.enabled
+    },
+    sessions
+  };
+  process.stdout.write(JSON.stringify(payload) + "\n");
+}
+function ack(id) {
+  if (id === void 0 || id === "") return;
+  setAttention(id, "working");
+  log("ack " + id + " \u2192 working");
+}
+function decide(current, arg) {
+  if (arg === "on") return true;
+  if (arg === "off") return false;
+  return !current;
+}
+function soundEnable(event, arg) {
+  if (event === void 0 || !SOUND_EVENTS.includes(event)) return;
+  const key = event;
+  const cfg = loadConfig();
+  const next = decide(cfg.sounds[key].enabled, arg);
+  const sounds = { ...cfg.sounds, [key]: { ...cfg.sounds[key], enabled: next } };
+  saveConfig({ ...cfg, sounds });
+  log("sound-enable " + key + " \u2192 " + (next ? "on" : "off"));
+}
+
+// src/main.ts
+var CMD_INDEX = 2;
+var ARG_INDEX = 3;
+var ARG2_INDEX = 4;
+var EXIT_ERR = 1;
+var COMMANDS = {
+  statusline: () => renderStatusline(readStdin()),
+  capture: () => capture(readStdin()),
+  sound: () => playSound(process.argv[ARG_INDEX]),
+  mute: () => mute(process.argv[ARG_INDEX]),
+  warp: () => warp(),
+  logs: () => showLogs(process.argv[ARG_INDEX]),
+  status: () => status(),
+  ack: () => ack(process.argv[ARG_INDEX]),
+  "sound-enable": () => soundEnable(process.argv[ARG_INDEX], process.argv[ARG2_INDEX])
+};
+function main() {
+  const cmd = process.argv[CMD_INDEX] ?? "";
+  const run = COMMANDS[cmd];
+  if (run === void 0) {
+    process.stderr.write("tricorder: unknown command '" + cmd + "'\n");
+    process.exit(EXIT_ERR);
+  }
+  try {
+    run();
+  } catch (err) {
+    process.stderr.write("tricorder: " + String(err) + "\n");
+  }
+}
+main();

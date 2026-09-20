@@ -1,0 +1,8 @@
+{
+  "name": "tricorder",
+  "version": "0.1.0",
+  "description": "Always-on Claude Code session panel — PRs, running sub-agents and their model, the plan-file link, and an honest context gauge — plus configurable attention sounds with a mute toggle.",
+  "author": { "name": "gagoar" },
+  "keywords": ["statusline", "hooks", "sounds", "iterm2", "session"],
+  "hooks": "./hooks/hooks.json"
+}
