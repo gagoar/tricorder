@@ -84,28 +84,30 @@
 
     <section id="install">
       <div class="lcars-section-header"><span class="lcars-heading">Installation</span></div>
-      <p>Requires macOS, iTerm2, Node on <code>PATH</code>, and a Swift toolchain (plain <code>swiftc</code> — no Xcode).</p>
+      <p>The statusline and the menu-bar app are <strong>independent</strong> — pick one, or both. Both need macOS.</p>
 
-      <p><strong>1. Install the plugin</strong></p>
+      <p><strong>Statusline only</strong> — Node on <code>PATH</code>, Claude Code with plugin support.</p>
       <pre class="lcars-code">/plugin marketplace add ~/.claude/tricorder-src
 /plugin install tricorder@tricorder</pre>
-
-      <p><strong>2. Wire the statusline</strong> (plugins can't contribute one — add this once to <code>~/.claude/settings.json</code>)</p>
+      <p>Then add this once to <code>~/.claude/settings.json</code> (plugins can't contribute a <code>statusLine</code> themselves):</p>
       <pre class="lcars-code">"statusLine": {
   "type": "command",
   "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/tricorder statusline"
 }</pre>
+      <p>That's it — no menu-bar app, no LaunchAgent.</p>
 
-      <p><strong>3. Build and launch the menu-bar app</strong></p>
+      <p><strong>Menu-bar app only</strong> — iTerm2, a Swift toolchain (plain <code>swiftc</code>, no Xcode). No <code>/plugin install</code> needed for this path.</p>
       <pre class="lcars-code">npm install
 npm run build:bar
 cp plugin/bar/TricorderBar.app ~/Applications/ -R
 sed "s|__HOME__|$HOME|g" bar/com.gago.tricorder.bar.plist &gt; ~/Library/LaunchAgents/com.gago.tricorder.bar.plist
 launchctl load ~/Library/LaunchAgents/com.gago.tricorder.bar.plist</pre>
-      <p>macOS will ask once to let Tricorder control iTerm2 (for session focus, restore, and the Enterprise flyby) — allow it.</p>
+      <p>macOS will ask once to let Tricorder control iTerm2 (for session focus, restore, and the Enterprise flyby) — allow it. Note: it has nothing to show until some Claude Code project has the plugin's hooks installed.</p>
 
-      <p>Full details, configuration, and the CLI reference live in the
-        <a href="https://github.com/gagoar/tricorder/blob/main/README.md">repo README</a>.</p>
+      <p><strong>Both</strong> (recommended) — do the statusline steps, then the menu-bar steps.</p>
+
+      <p>Full details, the CLI-only path, configuration, and the CLI reference live in the
+        <a href="https://github.com/gagoar/tricorder/blob/main/README.md#install">repo README</a>.</p>
     </section>
 
     <section id="warp">

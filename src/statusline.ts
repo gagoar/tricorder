@@ -62,13 +62,14 @@ function osc8(url: string, text: string): string {
   return ESC + "]8;;" + url + BEL + text + ESC + "]8;;" + BEL;
 }
 
-// Route path clicks through the tricorder handler; macOS opens each path with the
-// app associated to its extension. The icon itself is the clickable target.
-const OPEN_SCHEME = "tricorder://open?path=";
-// iTerm2 only makes OSC 8 links clickable when they contain text, so every link
-// carries a short word target next to its icon (an emoji alone is not clickable).
+// A plain file:// link already opens with the app associated to that file's
+// extension via macOS LaunchServices — no custom scheme or app dependency
+// needed, so the statusline's path links work standalone even when
+// TricorderBar.app isn't installed. iTerm2 only makes OSC 8 links clickable
+// when they contain text, so every link carries a short word target next to
+// its icon (an emoji alone is not clickable).
 function openLink(path: string, text: string): string {
-  return osc8(OPEN_SCHEME + encodeURIComponent(path), text);
+  return osc8("file://" + encodeURI(path), text);
 }
 
 // ---- visible width (strip ANSI + OSC 8; emoji count as 2) ------------------

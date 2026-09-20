@@ -59,30 +59,30 @@ runtime (or the optional dependency-free build below).
 
 ## Requirements
 
-- macOS (uses AppKit, AppleScript, `afplay`)
-- **iTerm2** — session focus, restore, warp, and log-tail all target it by name; no fallback for other terminals
-- **Node** on `PATH` at runtime (the shipped binary is a Node shim) — or run `npm run build:sea` for a ~119MB standalone binary with no Node dependency
-- A Swift toolchain (`swiftc` — no Xcode) to build the menu-bar app
-- Claude Code with plugin support
+The statusline and the menu-bar app are **independent** — install either one alone, or both. Both need macOS.
+
+- **Statusline**: Node on `PATH` at runtime (the shipped binary is a Node shim — or run `npm run build:sea` for a ~119MB standalone binary with no Node dependency); Claude Code with plugin support.
+- **Menu-bar app**: **iTerm2** — session focus, restore, warp, and log-tail all target it by name, no fallback for other terminals; a Swift toolchain (`swiftc` — no Xcode) to build it. Needs **no** Claude Code plugin install of its own — it only shells out to the CLI binary and to iTerm2/AppleScript. It has nothing to show, though, until *some* Claude Code project has the plugin's hooks installed.
 
 ## Install
 
-**1. Install the plugin**
+Pick the path that matches what you want. Neither needs the other.
+
+### Statusline only
 ```
 /plugin marketplace add ~/.claude/tricorder-src
 /plugin install tricorder@tricorder
 ```
-This wires the `capture` and `sound` hooks automatically — they merge with any hooks you already have.
-
-**2. Wire the statusline** — plugins can't contribute one, so add this once to `~/.claude/settings.json`:
+This wires the `capture` and `sound` hooks automatically — they merge with any hooks you already have. Then add this once to `~/.claude/settings.json` (plugins can't contribute a `statusLine` themselves):
 ```json
 "statusLine": {
   "type": "command",
   "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/tricorder statusline"
 }
 ```
+That's it — no menu-bar app, no LaunchAgent, nothing else to build.
 
-**3. Build and launch the menu-bar app**
+### Menu-bar app only
 ```
 npm install
 npm run build:bar
@@ -90,13 +90,24 @@ cp plugin/bar/TricorderBar.app ~/Applications/ -R
 sed "s|__HOME__|$HOME|g" bar/com.gago.tricorder.bar.plist > ~/Library/LaunchAgents/com.gago.tricorder.bar.plist
 launchctl load ~/Library/LaunchAgents/com.gago.tricorder.bar.plist
 ```
-The first time it focuses a session or restores one, macOS asks permission for Tricorder to control iTerm2 — allow it.
+The first time it focuses a session or restores one, macOS asks permission for Tricorder to control iTerm2 — allow it. No `/plugin install` step needed for this path.
 
-**Optional: dependency-free binary**
+### Both (recommended)
+Do the Statusline steps, then the Menu-bar app steps. This is the intended full experience and the only path that gets you nice session labels immediately (see Known limitations below).
+
+### CLI-only, no persistent app
+Sounds, mute, and restore are plain CLI commands — usable by hand or from a shell alias without ever running the menu-bar app:
+```
+tricorder mute toggle
+tricorder sound-enable question toggle
+tricorder logs
+```
+
+### Optional: dependency-free binary
 ```
 npm run build:sea
 ```
-Produces a self-contained binary that doesn't need Node on `PATH`.
+Produces a self-contained binary that doesn't need Node on `PATH`. Works with either install path above — it just changes how `bin/tricorder` runs, not what depends on what.
 
 ## Configuration
 
@@ -134,6 +145,21 @@ writes tiny per-session state files under `~/.claude/tricorder/state/`.
 Code gives it. `TricorderBar.swift` polls `tricorder status` on a 1-second
 background timer and only ever reads cached results when you open the menu,
 so opening it is instant no matter how much is going on.
+
+## Known limitations
+
+- **Sub-agent model needs the statusline, at least once.** A sub-agent's model
+  is exact when its spawn set an override, or inherited from the session once
+  `tricorder statusline` has rendered for it at least once — no Claude Code
+  hook payload carries the session's model name, only the statusline's
+  stdin payload does. Until then it shows `default`. This only affects the
+  statusline's own sub-agent line; the menu-bar app never displays model, so
+  running menu-bar-only is unaffected.
+- **Menu-bar-only sessions get a plain label at first.** Without the
+  statusline ever running, session labels and Restore Sessions group names
+  come from `basename(cwd)` (e.g. `checkout-service`) rather than a branch
+  name — still a real name, just less specific. The nicer label takes over
+  automatically the moment the statusline renders for that session.
 
 ## Credits
 
