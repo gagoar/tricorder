@@ -23,6 +23,19 @@ ask_yn() { # prompt, default(Y|N) -> prints "yes" or "no"
   case "$ans" in [Yy]*) echo "yes" ;; *) echo "no" ;; esac
 }
 
+ask_worktree_click() { # -> prints "open" | "copy" | "both"
+  local ans
+  echo "  1) Open the directory (default, works with no app installed)"
+  echo "  2) Copy the path"
+  echo "  3) Both"
+  read -r -p "  Clicking the worktree link should [1]: " ans 2>/dev/null <"$TTY_SOURCE" || ans=""
+  case "$ans" in
+    2) echo "copy" ;;
+    3) echo "both" ;;
+    *) echo "open" ;;
+  esac
+}
+
 echo "${BOLD}🖖 Tricorder setup${RESET}"
 echo "The statusline (terminal panel) and the menu-bar app are independent."
 echo "Default is both — press enter to accept, or answer no to skip one."
@@ -60,6 +73,14 @@ if [ "$WANT_STATUSLINE" = "yes" ]; then
       ok "statusLine wired in ~/.claude/settings.json"
     else
       warn "statusLine not changed automatically — see the message above"
+    fi
+    echo
+    echo "  Clicking the worktree path in the statusline can open it, copy it, or both."
+    WORKTREE_CLICK_MODE=$(ask_worktree_click)
+    node plugin/bin/tricorder worktree-click "$WORKTREE_CLICK_MODE" >/dev/null 2>&1 \
+      && ok "worktree link set to '$WORKTREE_CLICK_MODE'"
+    if [ "$WORKTREE_CLICK_MODE" != "open" ] && [ "$WANT_BAR" = "no" ]; then
+      warn "copy/both need the menu-bar app running to handle the click — install it too, or the link will do nothing."
     fi
   fi
   echo

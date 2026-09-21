@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { loadConfig } from "./config";
+import { loadConfig, type WorktreeClickMode } from "./config";
 import {
   getPlan,
   introElapsed,
@@ -72,6 +72,16 @@ function openLink(path: string, text: string): string {
   return osc8("file://" + encodeURI(path), text);
 }
 
+// Copying to the clipboard can't happen from a plain link click — it needs
+// TricorderBar.app to handle the URL and write to NSPasteboard. "open" stays a
+// bare file:// link (works with no app installed); "copy"/"both" route
+// through the app.
+const WORKTREE_SCHEME = "tricorder://worktree?path=";
+function worktreeLink(path: string, text: string, mode: WorktreeClickMode): string {
+  if (mode === "open") return openLink(path, text);
+  return osc8(WORKTREE_SCHEME + encodeURIComponent(path) + "&mode=" + mode, text);
+}
+
 // ---- visible width (strip ANSI + OSC 8; emoji count as 2) ------------------
 
 const OSC8_RE = /\x1b\]8;;[^\x07]*\x07/g;
@@ -142,7 +152,7 @@ function worktreeSegment(p: Payload): string | null {
   const path = wt?.path ?? p.workspace?.current_dir ?? p.cwd ?? "";
   if (path === "") return null;
   const label = wt?.branch ?? wt?.name ?? (basename(path) || path);
-  return openLink(path, ICON_TREE + " " + label);
+  return worktreeLink(path, ICON_TREE + " " + label, loadConfig().worktreeClick);
 }
 
 function terminalWidth(): number {

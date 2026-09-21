@@ -16,6 +16,7 @@ struct SessionStatus: Codable {
     let at: Double
     let iterm: String
     let agents: Int
+    let lastSound: Double?
 }
 struct Sounds: Codable {
     let question: Bool
@@ -25,8 +26,18 @@ struct Sounds: Codable {
 }
 struct Status: Codable {
     let muted: Bool
+    let worktreeClick: String
     let sounds: Sounds
     let sessions: [SessionStatus]
+}
+
+// A row's sound counts as "just played" for this long after it fired — long
+// enough to notice among several "mission complete" rows, short enough that
+// it stops pointing at a stale event.
+let JUST_PLAYED_WINDOW_MS: Double = 8000
+func justPlayed(_ lastSound: Double?) -> Bool {
+    guard let at = lastSound else { return false }
+    return Date().timeIntervalSince1970 * 1000 - at < JUST_PLAYED_WINDOW_MS
 }
 
 // ---- running the tricorder binary (GUI apps lack nvm's node on PATH) --------
@@ -83,11 +94,76 @@ func fetchStatus() -> Status? {
     return try? JSONDecoder().decode(Status.self, from: data)
 }
 
+// ITERM_SESSION_ID is "<pane>:<GUID>"; an iTerm2 session's AppleScript id IS
+// that GUID.
+func guidFromIterm(_ iterm: String) -> String {
+    iterm.contains(":") ? String(iterm.split(separator: ":").last ?? "") : iterm
+}
+
+let CLAUDE_TITLE_SUFFIX = " (claude)"
+
+// Claude Code sets the iTerm2 tab title to a leading status glyph (◑/✳/...)
+// plus the session's own name plus " (claude)". That name is the ground truth
+// for "what is this session called" — a user-renamed worktree or basename
+// heuristic can't compete with it, so it takes priority over the stored label
+// whenever iTerm2 has one for this session.
+func cleanSessionName(_ raw: String) -> String {
+    var s = raw
+    if s.hasSuffix(CLAUDE_TITLE_SUFFIX) {
+        s = String(s.dropLast(CLAUDE_TITLE_SUFFIX.count))
+    }
+    if let first = s.first, !first.isLetter, !first.isNumber {
+        s = String(s.dropFirst()).trimmingCharacters(in: .whitespaces)
+    }
+    return s.isEmpty ? raw : s
+}
+
+// One AppleScript call enumerating every window/tab/session, run once per
+// background refresh tick rather than per row — cheap relative to fetchStatus.
+func iterm2SessionNames() -> [String: String] {
+    // `tab`/`linefeed` must be resolved to the global text constants *before*
+    // entering `tell application "iTerm2"` — iTerm2's own dictionary defines a
+    // `tab` class (window > tab > session), and inside the tell block bare
+    // `tab` resolves to that class instead of the ASCII tab character, so the
+    // separator silently became the literal text "tab".
+    let script = """
+    set tabChar to tab
+    set nl to linefeed
+    tell application "iTerm2"
+      set output to ""
+      repeat with w in windows
+        repeat with t in tabs of w
+          repeat with s in sessions of t
+            set output to output & (id of s) & tabChar & (name of s) & nl
+          end repeat
+        end repeat
+      end repeat
+      return output
+    end tell
+    """
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    p.arguments = ["-e", script]
+    let out = Pipe()
+    p.standardOutput = out
+    p.standardError = Pipe()
+    do { try p.run() } catch { return [:] }
+    let data = out.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    let text = String(data: data, encoding: .utf8) ?? ""
+    var result: [String: String] = [:]
+    for line in text.split(separator: "\n") {
+        let parts = line.split(separator: "\t", maxSplits: 1)
+        guard parts.count == 2 else { continue }
+        result[String(parts[0])] = cleanSessionName(String(parts[1]))
+    }
+    return result
+}
+
 func focusSession(_ iterm: String) {
-    // ITERM_SESSION_ID is "<pane>:<GUID>"; an iTerm2 session's AppleScript id IS
-    // that GUID. AppleScript is reliable from the app (it2 needs API auth the
-    // launchctl context lacks).
-    let guid = iterm.contains(":") ? String(iterm.split(separator: ":").last ?? "") : iterm
+    // AppleScript is reliable from the app (it2 needs API auth the launchctl
+    // context lacks).
+    let guid = guidFromIterm(iterm)
     if guid.isEmpty { return }
     // Find the session first, then select its window/tab/session — selecting a
     // window mid-iteration invalidates the loop. Raising the window is what makes
@@ -218,6 +294,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // what was displayed rather than a freshly re-derived (possibly different) set.
     var restorableGroups: [(name: String, sessions: [RestorableSession])] = []
     var recentLogLines: [String] = []
+    // GUID -> live iTerm2 session name. Ground truth for "what is this session
+    // called" — preferred over the stored label whenever iTerm2 has one.
+    var itermNames: [String: String] = [:]
     private let refreshQueue = DispatchQueue(label: "com.gago.tricorder.refresh", qos: .utility)
     private var isRefreshing = false
 
@@ -269,17 +348,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshQueue.async { [weak self] in
             let status = fetchStatus()
             let groups = groupedRestorableSessions()
+            let names = iterm2SessionNames()
             let logs = runTricorder(["logs", "8"], capture: true)
                 .split(separator: "\n").suffix(8).map(String.init)
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.current = status
                 self.restorableGroups = groups
+                self.itermNames = names
                 self.recentLogLines = logs
                 self.updateIcon()
                 self.isRefreshing = false
             }
         }
+    }
+
+    // The live iTerm2 name (Claude Code's own tab title, minus its status
+    // glyph and " (claude)" suffix) if we have one for this session, else the
+    // stored label. iTerm2 is ground truth for "what is this session called."
+    func displayLabel(_ sess: SessionStatus) -> String {
+        itermNames[guidFromIterm(sess.iterm)] ?? sess.label
     }
 
     // Rebuild the menu only when it's about to open (avoids flicker on the 1s
@@ -300,8 +388,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             for sess in all {
                 let agentsSuffix = sess.agents > 0 ? " · \(sess.agents) agent\(sess.agents == 1 ? "" : "s")" : ""
+                let speaker = justPlayed(sess.lastSound) ? "🔊 " : ""
                 let item = NSMenuItem(
-                    title: "\(sess.label) — \(stateLabel(sess.state))\(agentsSuffix) · \(ageString(sess.at))",
+                    title: "\(speaker)\(displayLabel(sess)) — \(stateLabel(sess.state))\(agentsSuffix) · \(ageString(sess.at))",
                     action: #selector(rowClicked(_:)), keyEquivalent: "")
                 item.target = self
                 item.image = iconImage(sess.state)  // the actual Star Trek icon per state
@@ -327,6 +416,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         addSoundToggle(sub, "Done", "stop", s.sounds.stop)
         soundsItem.submenu = sub
         menu.addItem(soundsItem)
+
+        let worktreeItem = NSMenuItem(title: "Worktree Link", action: nil, keyEquivalent: "")
+        let worktreeSub = NSMenu()
+        addWorktreeClickOption(worktreeSub, "Open the directory", "open", s.worktreeClick)
+        addWorktreeClickOption(worktreeSub, "Copy the path", "copy", s.worktreeClick)
+        addWorktreeClickOption(worktreeSub, "Both", "both", s.worktreeClick)
+        worktreeItem.submenu = worktreeSub
+        menu.addItem(worktreeItem)
 
         menu.addItem(.separator())
         let warp = NSMenuItem(title: "Fly the Enterprise 🚀", action: #selector(warpClicked), keyEquivalent: "")
@@ -364,6 +461,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.target = self
         item.state = on ? .on : .off
         item.representedObject = key
+        menu.addItem(item)
+    }
+
+    func addWorktreeClickOption(_ menu: NSMenu, _ title: String, _ mode: String, _ current: String) {
+        let item = NSMenuItem(title: title, action: #selector(worktreeClickSelected(_:)), keyEquivalent: "")
+        item.target = self
+        item.state = mode == current ? .on : .off
+        item.representedObject = mode
         menu.addItem(item)
     }
 
@@ -408,6 +513,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         runTricorder(["sound-enable", key, "toggle"]); refresh()
     }
     @objc func warpClicked() { flyEnterprise() }
+    @objc func worktreeClickSelected(_ sender: NSMenuItem) {
+        guard let mode = sender.representedObject as? String else { return }
+        runTricorder(["worktree-click", mode]); refresh()
+    }
     @objc func restoreAllClicked() { restoreSessions(restorableGroups.map { $0.sessions }) }
     @objc func restoreGroupClicked(_ sender: NSMenuItem) {
         guard let idx = sender.representedObject as? Int, idx >= 0, idx < restorableGroups.count else { return }
@@ -439,8 +548,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // those, so the statusline works standalone without this app.
         if url == "tricorder://mute" { runTricorder(["mute", "toggle"]); refresh() }
         else if url == "tricorder://warp" { flyEnterprise() }
-        else if url.hasPrefix("tricorder://sound-set") {
+        else if url.hasPrefix("tricorder://worktree") {
+            handleWorktreeClick(url)
+        } else if url.hasPrefix("tricorder://sound-set") {
             handleSoundSet(url)
+        }
+    }
+
+    // tricorder://worktree?path=...&mode=copy|both — the statusline routes the
+    // worktree link here whenever the configured click mode needs the app
+    // (a bare link can't write the clipboard on its own).
+    func handleWorktreeClick(_ url: String) {
+        guard let comps = URLComponents(string: url) else { return }
+        let items = comps.queryItems ?? []
+        let path = items.first(where: { $0.name == "path" })?.value ?? ""
+        let mode = items.first(where: { $0.name == "mode" })?.value ?? ""
+        guard !path.isEmpty else { return }
+        if mode == "copy" || mode == "both" {
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(path, forType: .string)
+        }
+        if mode == "both" {
+            NSWorkspace.shared.open(URL(fileURLWithPath: path))
         }
     }
 

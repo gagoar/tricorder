@@ -24,14 +24,26 @@ export interface SoundEntry {
   readonly file: string;
 }
 
+// Clicking the worktree link in the statusline: open the path (plain file://,
+// no app dependency), copy it to the clipboard (needs TricorderBar.app to
+// handle the click), or both.
+export const WORKTREE_CLICK_MODES = ["open", "copy", "both"] as const;
+export type WorktreeClickMode = (typeof WORKTREE_CLICK_MODES)[number];
+
+export function isWorktreeClickMode(value: unknown): value is WorktreeClickMode {
+  return (WORKTREE_CLICK_MODES as readonly unknown[]).includes(value);
+}
+
 export interface Config {
   muted: boolean;
+  worktreeClick: WorktreeClickMode;
   readonly sounds: Record<SoundEvent, SoundEntry>;
 }
 
 export const DEFAULT_CONFIG: Config = {
   // Sounds off by default; turn them on from the menu-bar app.
   muted: true,
+  worktreeClick: "open",
   sounds: {
     // "Please specify how you would like to proceed" — plays when Claude waits
     // on you (Notification / AskUserQuestion).
@@ -81,6 +93,7 @@ function mergeConfig(base: Config, override: Partial<Config>): Config {
   ) as Record<SoundEvent, SoundEntry>;
   return {
     muted: typeof override.muted === "boolean" ? override.muted : base.muted,
+    worktreeClick: isWorktreeClickMode(override.worktreeClick) ? override.worktreeClick : base.worktreeClick,
     sounds,
   };
 }

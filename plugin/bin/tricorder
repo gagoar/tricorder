@@ -28,9 +28,14 @@ var QUESTION_SOUND = (0, import_node_path.join)(SOUNDS_DIR, "please-specify.mp3"
 var PERMISSION_SOUND = (0, import_node_path.join)(SOUNDS_DIR, "security-authorisation.mp3");
 var STOP_SOUND = (0, import_node_path.join)(SOUNDS_DIR, "transporter-complete.mp3");
 var PLAN_SOUND = (0, import_node_path.join)(SOUNDS_DIR, "engage.mp3");
+var WORKTREE_CLICK_MODES = ["open", "copy", "both"];
+function isWorktreeClickMode(value) {
+  return WORKTREE_CLICK_MODES.includes(value);
+}
 var DEFAULT_CONFIG = {
   // Sounds off by default; turn them on from the menu-bar app.
   muted: true,
+  worktreeClick: "open",
   sounds: {
     // "Please specify how you would like to proceed" — plays when Claude waits
     // on you (Notification / AskUserQuestion).
@@ -75,6 +80,7 @@ function mergeConfig(base, override) {
   );
   return {
     muted: typeof override.muted === "boolean" ? override.muted : base.muted,
+    worktreeClick: isWorktreeClickMode(override.worktreeClick) ? override.worktreeClick : base.worktreeClick,
     sounds
   };
 }
@@ -156,6 +162,20 @@ function setModel(sessionId, model) {
 function getModel(sessionId) {
   try {
     return (0, import_node_fs3.readFileSync)((0, import_node_path2.join)(sessionDir(sessionId), MODEL_FILE), "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+var SOUND_AT_FILE = "sound-at.txt";
+function setLastSound(sessionId) {
+  const dir = sessionDir(sessionId);
+  ensureDir(dir);
+  (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, SOUND_AT_FILE), String(Date.now()));
+}
+function getLastSound(sessionId) {
+  try {
+    const raw = Number((0, import_node_fs3.readFileSync)((0, import_node_path2.join)(sessionDir(sessionId), SOUND_AT_FILE), "utf8").trim());
+    return Number.isFinite(raw) ? raw : null;
   } catch {
     return null;
   }
@@ -260,6 +280,11 @@ function osc8(url, text) {
 function openLink(path, text) {
   return osc8("file://" + encodeURI(path), text);
 }
+var WORKTREE_SCHEME = "tricorder://worktree?path=";
+function worktreeLink(path, text, mode) {
+  if (mode === "open") return openLink(path, text);
+  return osc8(WORKTREE_SCHEME + encodeURIComponent(path) + "&mode=" + mode, text);
+}
 var OSC8_RE = /\x1b\]8;;[^\x07]*\x07/g;
 var SGR_RE = /\x1b\[[0-9;]*m/g;
 var VS16 = 65039;
@@ -317,7 +342,7 @@ function worktreeSegment(p) {
   const path = wt?.path ?? p.workspace?.current_dir ?? p.cwd ?? "";
   if (path === "") return null;
   const label = wt?.branch ?? wt?.name ?? ((0, import_node_path3.basename)(path) || path);
-  return openLink(path, ICON_TREE + " " + label);
+  return worktreeLink(path, ICON_TREE + " " + label, loadConfig().worktreeClick);
 }
 function terminalWidth() {
   return Number(process.env.COLUMNS) || (process.stdout.columns ?? 0);
@@ -642,7 +667,18 @@ function debounced() {
   }
   return false;
 }
-function playSound(eventArg) {
+function isSoundHookInput(value) {
+  return typeof value === "object" && value !== null;
+}
+function sessionFromStdin(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    return isSoundHookInput(parsed) ? parsed.session_id ?? "" : "";
+  } catch {
+    return "";
+  }
+}
+function playSound(eventArg, raw) {
   if (!isSoundEvent(eventArg)) {
     log("sound " + (eventArg ?? "?") + " \u2192 invalid event");
     return;
@@ -667,6 +703,8 @@ function playSound(eventArg) {
     return;
   }
   log("sound " + eventArg + " \u2192 play " + entry.file);
+  const session = sessionFromStdin(raw);
+  if (session) setLastSound(session);
   const child = (0, import_node_child_process2.spawn)(AFPLAY, [entry.file], { stdio: "ignore", detached: true });
   child.on("error", () => {
   });
@@ -790,7 +828,8 @@ function sessionStatus(id, now) {
     state: a.state,
     at: a.at,
     iterm: getItermId(id) ?? "",
-    agents: listSubagents(id).length
+    agents: listSubagents(id).length,
+    lastSound: getLastSound(id)
   };
 }
 function status() {
@@ -799,6 +838,7 @@ function status() {
   const sessions = listSessions().map((id) => sessionStatus(id, now)).filter((s) => s !== null);
   const payload = {
     muted: cfg.muted,
+    worktreeClick: cfg.worktreeClick,
     sounds: {
       question: cfg.sounds.question.enabled,
       permission: cfg.sounds.permission.enabled,
@@ -898,6 +938,19 @@ async function soundSet(eventArg, urlArg, nameArg) {
   log("sound-set " + eventArg + " \u2192 " + dest);
 }
 
+// src/worktreeclick.ts
+function worktreeClick(arg) {
+  const mode = (arg ?? "").toLowerCase();
+  if (!isWorktreeClickMode(mode)) {
+    log("worktree-click " + (arg ?? "?") + " \u2192 invalid mode");
+    return;
+  }
+  const cfg = loadConfig();
+  saveConfig({ ...cfg, worktreeClick: mode });
+  log("worktree-click \u2192 " + mode);
+  process.stdout.write(mode + "\n");
+}
+
 // src/main.ts
 var CMD_INDEX = 2;
 var ARG_INDEX = 3;
@@ -907,8 +960,9 @@ var EXIT_ERR = 1;
 var COMMANDS = {
   statusline: () => renderStatusline(readStdin()),
   capture: () => capture(readStdin()),
-  sound: () => playSound(process.argv[ARG_INDEX]),
+  sound: () => playSound(process.argv[ARG_INDEX], readStdin()),
   mute: () => mute(process.argv[ARG_INDEX]),
+  "worktree-click": () => worktreeClick(process.argv[ARG_INDEX]),
   warp: () => warp(),
   logs: () => showLogs(process.argv[ARG_INDEX]),
   status: () => status(),
