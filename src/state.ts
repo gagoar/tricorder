@@ -152,6 +152,14 @@ export function setLabel(sessionId: string, label: string): void {
 export function getLabel(sessionId: string): string | null {
   return readText(sessionId, LABEL_FILE);
 }
+// Seeds a baseline label from hooks alone (e.g. basename(cwd)) so a
+// menu-bar-only setup — no statusline ever wired up — still gets a real name
+// instead of a UUID fragment. Never overwrites: the statusline's branch-aware
+// label is nicer and always takes over once it renders.
+export function setLabelIfAbsent(sessionId: string, label: string): void {
+  if (existsSync(join(sessionDir(sessionId), LABEL_FILE))) return;
+  writeText(sessionId, LABEL_FILE, label);
+}
 export function setItermId(sessionId: string, id: string): void {
   writeText(sessionId, ITERM_FILE, id);
 }

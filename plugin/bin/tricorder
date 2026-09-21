@@ -191,6 +191,10 @@ function setLabel(sessionId, label) {
 function getLabel(sessionId) {
   return readText(sessionId, LABEL_FILE);
 }
+function setLabelIfAbsent(sessionId, label) {
+  if ((0, import_node_fs3.existsSync)((0, import_node_path2.join)(sessionDir(sessionId), LABEL_FILE))) return;
+  writeText(sessionId, LABEL_FILE, label);
+}
 function setItermId(sessionId, id) {
   writeText(sessionId, ITERM_FILE, id);
 }
@@ -253,9 +257,8 @@ function sgr(code, text) {
 function osc8(url, text) {
   return ESC + "]8;;" + url + BEL + text + ESC + "]8;;" + BEL;
 }
-var OPEN_SCHEME = "tricorder://open?path=";
 function openLink(path, text) {
-  return osc8(OPEN_SCHEME + encodeURIComponent(path), text);
+  return osc8("file://" + encodeURI(path), text);
 }
 var OSC8_RE = /\x1b\]8;;[^\x07]*\x07/g;
 var SGR_RE = /\x1b\[[0-9;]*m/g;
@@ -460,6 +463,7 @@ function showLogs(arg) {
 
 // src/capture.ts
 var DESC_MAX = 60;
+var LABEL_FALLBACK_LEN = 8;
 var HASH_LEN = 24;
 var PLAN_PATH_RE = /\/\.claude\/plans\/[^/]+\.md$/;
 var PR_URL_RE = /https?:\/\/[^\s"']*\/pull\/\d+/;
@@ -590,7 +594,10 @@ function capture(raw) {
   if (str(input.hook_event_name) !== "SessionEnd") {
     const iterm = process.env.ITERM_SESSION_ID;
     if (iterm !== void 0 && iterm !== "") setItermId(session, iterm);
-    if (input.cwd !== void 0 && input.cwd !== "") setCwd(session, input.cwd);
+    if (input.cwd !== void 0 && input.cwd !== "") {
+      setCwd(session, input.cwd);
+      setLabelIfAbsent(session, (0, import_node_path5.basename)(input.cwd) || session.slice(0, LABEL_FALLBACK_LEN));
+    }
   }
   const reaction = route(session, input);
   if (!NOOP_REACTIONS.has(reaction)) {
@@ -772,14 +779,14 @@ function warp() {
 var HOURS_STALE = 6;
 var MS_PER_HOUR = 36e5;
 var STALE_MS = HOURS_STALE * MS_PER_HOUR;
-var LABEL_FALLBACK_LEN = 8;
+var LABEL_FALLBACK_LEN2 = 8;
 var SOUND_EVENTS = ["question", "permission", "stop", "plan"];
 function sessionStatus(id, now) {
   const a = getAttention(id);
   if (a === null || now - a.at >= STALE_MS) return null;
   return {
     id,
-    label: getLabel(id) ?? id.slice(0, LABEL_FALLBACK_LEN),
+    label: getLabel(id) ?? id.slice(0, LABEL_FALLBACK_LEN2),
     state: a.state,
     at: a.at,
     iterm: getItermId(id) ?? "",

@@ -13,6 +13,7 @@ import {
   setAttention,
   setCwd,
   setItermId,
+  setLabelIfAbsent,
   setPlan,
   type PR,
 } from "./state";
@@ -34,6 +35,7 @@ interface HookInput {
 }
 
 const DESC_MAX = 60;
+const LABEL_FALLBACK_LEN = 8;
 const HASH_LEN = 24;
 const PLAN_PATH_RE = /\/\.claude\/plans\/[^/]+\.md$/;
 const PR_URL_RE = /https?:\/\/[^\s"']*\/pull\/\d+/;
@@ -186,7 +188,10 @@ export function capture(raw: string): void {
   if (str(input.hook_event_name) !== "SessionEnd") {
     const iterm = process.env.ITERM_SESSION_ID;
     if (iterm !== undefined && iterm !== "") setItermId(session, iterm);
-    if (input.cwd !== undefined && input.cwd !== "") setCwd(session, input.cwd);
+    if (input.cwd !== undefined && input.cwd !== "") {
+      setCwd(session, input.cwd);
+      setLabelIfAbsent(session, basename(input.cwd) || session.slice(0, LABEL_FALLBACK_LEN));
+    }
   }
   const reaction = route(session, input);
   if (!NOOP_REACTIONS.has(reaction)) {

@@ -6,7 +6,6 @@ import Foundation
 let HOME = FileManager.default.homeDirectoryForCurrentUser.path
 let SHIM = "\(HOME)/.claude/tricorder-src/plugin/bin/tricorder"
 let IT2 = "/Applications/iTerm.app/Contents/Resources/utilities/it2"
-let OPEN_PREFIX = "tricorder://open?path="
 
 // ---- status model ----------------------------------------------------------
 
@@ -435,14 +434,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func handleURL(_ event: NSAppleEventDescriptor, withReplyEvent: NSAppleEventDescriptor) {
         guard let url = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue else { return }
+        // Path links (worktree/plan) use plain file:// now, opened by macOS
+        // itself via LaunchServices — no app-specific handling needed for
+        // those, so the statusline works standalone without this app.
         if url == "tricorder://mute" { runTricorder(["mute", "toggle"]); refresh() }
         else if url == "tricorder://warp" { flyEnterprise() }
-        else if url.hasPrefix(OPEN_PREFIX) {
-            let enc = String(url.dropFirst(OPEN_PREFIX.count))
-            if let path = enc.removingPercentEncoding {
-                NSWorkspace.shared.open(URL(fileURLWithPath: path))
-            }
-        } else if url.hasPrefix("tricorder://sound-set") {
+        else if url.hasPrefix("tricorder://sound-set") {
             handleSoundSet(url)
         }
     }

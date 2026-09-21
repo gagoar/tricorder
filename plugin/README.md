@@ -13,12 +13,12 @@ The statusline shows, on multiple lines and only when there's something to show:
 🤖 Explore Opus 4.8, review Sonnet 5
 ```
 
-- **Worktree / cwd** — a `tricorder://open?path=…` link (Cmd-click to open it in the app associated with its extension).
+- **Worktree / cwd** — a `file://` link (Cmd-click to open it in the app associated with its extension via macOS LaunchServices — no menu-bar app needed for this).
 - **Context gauge** — percent only, colored green/yellow/red (green below 70%, yellow from 70%, red from 90%). It reports the truth; it cannot force a compact (the harness owns that).
 - **Model** — the current session model.
 - **PRs** — every PR created this session, each an `https` link.
-- **Sub-agents** — one line per running sub-agent: type and model, comma-separated. The model is exact only when the spawn set an override or is inherited from the session; otherwise it shows `default`.
-- **Plan** — the plan file, right-aligned, a `tricorder://open?path=…` link.
+- **Sub-agents** — one line per running sub-agent: type and model, comma-separated. The model is exact when the spawn set an override, or inherited from the session once the statusline has rendered at least once (no Claude Code hook payload carries the session's model name, only the statusline's does); until then it shows `default`. This only affects the statusline's own display — the menu-bar app never shows model, so it's unaffected either way.
+- **Plan** — the plan file, right-aligned, a `file://` link.
 - **🔇** — shown only when muted (a passive indicator; mute itself lives in the menu-bar app, not the statusline).
 
 ## What it ships
@@ -41,6 +41,10 @@ One binary, ten subcommands, dispatched by the first argument:
 `capture` and `sound` arrive as plugin hooks and **merge** with your existing hooks. The statusline is the one line you add yourself — plugins cannot contribute a `statusLine`. The rest are driven by the native macOS menu-bar app, `TricorderBar` — see the repo README for building and installing it.
 
 ## Install
+
+This is the statusline path — fully independent of the menu-bar app, no
+build step required. See the [repo README](../README.md#install) for the
+menu-bar-app-only path, or for running both together.
 
 ```
 /plugin marketplace add ~/.claude/tricorder-src
