@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  build-and-check:
+    name: build-and-check
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Validate JSON config files
+        run: |
+          set -e
+          for f in plugin/config.json plugin/hooks/hooks.json plugin/.claude-plugin/plugin.json \
+                   .claude-plugin/marketplace.json docs/catalog.json; do
+            echo "checking $f"
+            node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))"
+          done
+
+      - name: Validate the LaunchAgent plist
+        run: plutil -lint bar/com.gago.tricorder.bar.plist
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build the CLI binary
+        run: npm run build
+
+      - name: Build the menu-bar app
+        run: npm run build:bar
