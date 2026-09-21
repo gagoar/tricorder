@@ -7,6 +7,7 @@ import { warp } from "./warp";
 import { showLogs } from "./log";
 import { ack, soundEnable, status } from "./status";
 import { soundSet } from "./catalog";
+import { worktreeClick } from "./worktreeclick";
 
 const CMD_INDEX = 2;
 const ARG_INDEX = 3;
@@ -17,8 +18,9 @@ const EXIT_ERR = 1;
 const COMMANDS: Readonly<Record<string, () => void | Promise<void>>> = {
   statusline: () => renderStatusline(readStdin()),
   capture: () => capture(readStdin()),
-  sound: () => playSound(process.argv[ARG_INDEX]),
+  sound: () => playSound(process.argv[ARG_INDEX], readStdin()),
   mute: () => mute(process.argv[ARG_INDEX]),
+  "worktree-click": () => worktreeClick(process.argv[ARG_INDEX]),
   warp: () => warp(),
   logs: () => showLogs(process.argv[ARG_INDEX]),
   status: () => status(),

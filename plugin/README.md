@@ -13,7 +13,7 @@ The statusline shows, on multiple lines and only when there's something to show:
 🤖 Explore Opus 4.8, review Sonnet 5
 ```
 
-- **Worktree / cwd** — a `file://` link (Cmd-click to open it in the app associated with its extension via macOS LaunchServices — no menu-bar app needed for this).
+- **Worktree / cwd** — a link whose click behavior is configurable (`worktreeClick` in config, default `open`): open it in the app associated with its extension via macOS LaunchServices (`file://`, no menu-bar app needed), copy the path to the clipboard, or both. Copy/both route through the menu-bar app, since a bare link can't write the clipboard on its own — see [Config](#config).
 - **Context gauge** — percent only, colored green/yellow/red (green below 70%, yellow from 70%, red from 90%). It reports the truth; it cannot force a compact (the harness owns that).
 - **Model** — the current session model.
 - **PRs** — every PR created this session, each an `https` link.
@@ -23,16 +23,17 @@ The statusline shows, on multiple lines and only when there's something to show:
 
 ## What it ships
 
-One binary, ten subcommands, dispatched by the first argument:
+One binary, eleven subcommands, dispatched by the first argument:
 
 | Subcommand | Wired to | Does |
 |---|---|---|
 | `tricorder statusline` | `statusLine.command` | renders the panel from the stdin payload + session state |
 | `tricorder capture` | hooks (Pre/PostToolUse, PermissionRequest, Stop, UserPromptSubmit, SessionEnd, sub-agent lifecycle) | records attention state, PRs, sub-agents, and the plan path |
-| `tricorder sound <event>` | `Notification` / `PermissionRequest` / `Stop` / plan hooks | plays the mapped sound unless muted |
+| `tricorder sound <event>` | `Notification` / `PermissionRequest` / `Stop` / plan hooks | plays the mapped sound unless muted, and stamps the session's "last sound" time for the menu-bar app's 🔊 indicator |
 | `tricorder sound-enable <event> [on\|off\|toggle]` | menu-bar app | flips one sound's enabled flag |
 | `tricorder sound-set <event> <url> [name]` | the [sound catalog page](https://gagoar.github.io/tricorder/sounds.html) | fetches a clip on demand (trekcore.com only) and assigns it to an event |
 | `tricorder mute [on\|off\|toggle]` | menu-bar app | flips the global mute |
+| `tricorder worktree-click <open\|copy\|both>` | `setup.sh` / menu-bar app | sets what clicking the worktree link does |
 | `tricorder warp` | menu-bar app / `tricorder://warp` | flies the Enterprise across a fresh iTerm2 tab |
 | `tricorder status` | menu-bar app (polled every 1s) | prints a JSON snapshot of all sessions + config |
 | `tricorder ack <id>` | menu-bar app | clears a session's attention state |
@@ -69,6 +70,7 @@ Effective config lives at `~/.claude/tricorder/config.json`, seeded on first run
 ```json
 {
   "muted": true,
+  "worktreeClick": "open",
   "sounds": {
     "question":   { "enabled": true,  "file": ".../please-specify.mp3" },
     "permission": { "enabled": false, "file": ".../security-authorisation.mp3" },
@@ -79,6 +81,8 @@ Effective config lives at `~/.claude/tricorder/config.json`, seeded on first run
 ```
 
 Sounds are **muted by default** — turn them on from the menu-bar app. `permission` defaults off since under `auto` mode with `skipAutoPermissionPrompt` it never fires anyway, and when it did it doubled up on questions. Edit a `file` to change a sound (or pick one from the [sound catalog](https://gagoar.github.io/tricorder/sounds.html), which fetches it for you), flip `enabled` to silence one event, or set `muted` to silence all. Sounds seed from the plugin's `sounds/` into `~/.claude/tricorder/sounds/` on first play.
+
+`worktreeClick` is `open` (a bare `file://` link, no app needed), `copy` (copies the path to the clipboard), or `both`. `copy`/`both` need the menu-bar app running — set it from `setup.sh`, or from the app's "Worktree Link" menu.
 
 `stop` overlaps with tars-voice, which also speaks on turn end. Disable one if the pair is too much.
 

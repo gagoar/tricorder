@@ -43,7 +43,7 @@ runtime (or the optional dependency-free build below).
 ## Features
 
 - **Multi-line statusline** — worktree link, a color-graded context-window gauge, model, PR links, running sub-agents with their model, and a plan-file link. Only non-empty lines render. A one-shot mini-ship animation greets each new session.
-- **Away-team menu bar** — one icon reflects the highest-priority state across every session (🔴 security, 🟡 question, 🟢 done). Click a row to focus that session's iTerm2 tab, wherever it is.
+- **Away-team menu bar** — one icon reflects the highest-priority state across every session (🔴 security, 🟡 question, 🟢 done). Click a row to focus that session's iTerm2 tab, wherever it is. A 🔊 marks whichever row's sound just played, so several "mission complete" rows aren't ambiguous about which one is current.
 - **Restore Sessions** — after a crash or reboot, reopen whole project families in fresh iTerm2 windows with one click, grouped automatically by directory.
 - **Attention klaxons** — four Star Trek voice/chime cues, muted by default, toggled per-event from the menu.
 - **Sound catalog** — browse and preview real clips from a public archive on the [site](https://gagoar.github.io/tricorder/sounds.html), and assign one to an event with a click — fetched on demand, nothing extra bundled in this repo.
@@ -129,16 +129,19 @@ Effective config lives at `~/.claude/tricorder/config.json`, seeded on first run
 
 Pick a different clip for any event from the [sound catalog](https://gagoar.github.io/tricorder/sounds.html) — it fetches on demand into `~/.claude/tricorder/sounds/` and updates the config for you. Override a menu-bar icon by dropping `~/.claude/tricorder/icons/<state>.svg`.
 
+`worktreeClick` controls what clicking the worktree link does: `open` (default, a bare `file://` link — no app needed), `copy` (copies the path to the clipboard), or `both`. `copy`/`both` need the menu-bar app running to handle the click; set it from `setup.sh`'s prompt or the app's "Worktree Link" menu.
+
 ## CLI reference
 
 | Command | Wired to | Does |
 |---|---|---|
 | `statusline` | `statusLine` setting | Renders the panel |
 | `capture` | hooks | Records session state |
-| `sound <event>` | hooks | Plays a configured sound if not muted |
+| `sound <event>` | hooks | Plays a configured sound if not muted; stamps the session's last-sound time for the menu-bar app's 🔊 indicator |
 | `sound-enable <event> [on\|off\|toggle]` | menu | Flips one sound's enabled flag |
 | `sound-set <event> <url> [name]` | catalog page | Fetches a pick and assigns it to an event (trekcore.com only) |
 | `mute [on\|off\|toggle]` | menu | Flips the global mute |
+| `worktree-click <open\|copy\|both>` | setup / menu | Sets what clicking the worktree link does |
 | `warp` | menu / URL | Flies the Enterprise |
 | `status` | menu (polled) | JSON snapshot for the menu-bar app |
 | `ack <id>` | menu | Clears a session's attention state |

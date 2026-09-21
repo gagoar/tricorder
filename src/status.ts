@@ -1,5 +1,13 @@
 import { loadConfig, saveConfig, type SoundEvent } from "./config";
-import { getAttention, getItermId, getLabel, listSessions, listSubagents, setAttention } from "./state";
+import {
+  getAttention,
+  getItermId,
+  getLabel,
+  getLastSound,
+  listSessions,
+  listSubagents,
+  setAttention,
+} from "./state";
 import { log } from "./log";
 
 const HOURS_STALE = 6;
@@ -18,6 +26,10 @@ interface SessionStatus {
   // Running sub-agent count. "working" is a real, active state — this makes it
   // impossible to mistake a session that's mid-fanout for an idle one.
   readonly agents: number;
+  // Epoch ms of the last sound that actually played for this session, or null
+  // if none has. Lets the menu-bar app mark exactly which "mission complete"
+  // row just made noise when several finish close together.
+  readonly lastSound: number | null;
 }
 
 function sessionStatus(id: string, now: number): SessionStatus | null {
@@ -30,6 +42,7 @@ function sessionStatus(id: string, now: number): SessionStatus | null {
     at: a.at,
     iterm: getItermId(id) ?? "",
     agents: listSubagents(id).length,
+    lastSound: getLastSound(id),
   };
 }
 
@@ -42,6 +55,7 @@ export function status(): void {
     .filter((s): s is SessionStatus => s !== null);
   const payload = {
     muted: cfg.muted,
+    worktreeClick: cfg.worktreeClick,
     sounds: {
       question: cfg.sounds.question.enabled,
       permission: cfg.sounds.permission.enabled,

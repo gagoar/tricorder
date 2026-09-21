@@ -16,6 +16,7 @@ struct SessionStatus: Codable {
     let at: Double
     let iterm: String
     let agents: Int
+    let lastSound: Double?
 }
 struct Sounds: Codable {
     let question: Bool
@@ -25,8 +26,18 @@ struct Sounds: Codable {
 }
 struct Status: Codable {
     let muted: Bool
+    let worktreeClick: String
     let sounds: Sounds
     let sessions: [SessionStatus]
+}
+
+// A row's sound counts as "just played" for this long after it fired — long
+// enough to notice among several "mission complete" rows, short enough that
+// it stops pointing at a stale event.
+let JUST_PLAYED_WINDOW_MS: Double = 8000
+func justPlayed(_ lastSound: Double?) -> Bool {
+    guard let at = lastSound else { return false }
+    return Date().timeIntervalSince1970 * 1000 - at < JUST_PLAYED_WINDOW_MS
 }
 
 // ---- running the tricorder binary (GUI apps lack nvm's node on PATH) --------
@@ -300,8 +311,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             for sess in all {
                 let agentsSuffix = sess.agents > 0 ? " · \(sess.agents) agent\(sess.agents == 1 ? "" : "s")" : ""
+                let speaker = justPlayed(sess.lastSound) ? "🔊 " : ""
                 let item = NSMenuItem(
-                    title: "\(sess.label) — \(stateLabel(sess.state))\(agentsSuffix) · \(ageString(sess.at))",
+                    title: "\(speaker)\(sess.label) — \(stateLabel(sess.state))\(agentsSuffix) · \(ageString(sess.at))",
                     action: #selector(rowClicked(_:)), keyEquivalent: "")
                 item.target = self
                 item.image = iconImage(sess.state)  // the actual Star Trek icon per state
@@ -327,6 +339,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         addSoundToggle(sub, "Done", "stop", s.sounds.stop)
         soundsItem.submenu = sub
         menu.addItem(soundsItem)
+
+        let worktreeItem = NSMenuItem(title: "Worktree Link", action: nil, keyEquivalent: "")
+        let worktreeSub = NSMenu()
+        addWorktreeClickOption(worktreeSub, "Open the directory", "open", s.worktreeClick)
+        addWorktreeClickOption(worktreeSub, "Copy the path", "copy", s.worktreeClick)
+        addWorktreeClickOption(worktreeSub, "Both", "both", s.worktreeClick)
+        worktreeItem.submenu = worktreeSub
+        menu.addItem(worktreeItem)
 
         menu.addItem(.separator())
         let warp = NSMenuItem(title: "Fly the Enterprise 🚀", action: #selector(warpClicked), keyEquivalent: "")
@@ -364,6 +384,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.target = self
         item.state = on ? .on : .off
         item.representedObject = key
+        menu.addItem(item)
+    }
+
+    func addWorktreeClickOption(_ menu: NSMenu, _ title: String, _ mode: String, _ current: String) {
+        let item = NSMenuItem(title: title, action: #selector(worktreeClickSelected(_:)), keyEquivalent: "")
+        item.target = self
+        item.state = mode == current ? .on : .off
+        item.representedObject = mode
         menu.addItem(item)
     }
 
@@ -408,6 +436,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         runTricorder(["sound-enable", key, "toggle"]); refresh()
     }
     @objc func warpClicked() { flyEnterprise() }
+    @objc func worktreeClickSelected(_ sender: NSMenuItem) {
+        guard let mode = sender.representedObject as? String else { return }
+        runTricorder(["worktree-click", mode]); refresh()
+    }
     @objc func restoreAllClicked() { restoreSessions(restorableGroups.map { $0.sessions }) }
     @objc func restoreGroupClicked(_ sender: NSMenuItem) {
         guard let idx = sender.representedObject as? Int, idx >= 0, idx < restorableGroups.count else { return }
@@ -439,8 +471,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // those, so the statusline works standalone without this app.
         if url == "tricorder://mute" { runTricorder(["mute", "toggle"]); refresh() }
         else if url == "tricorder://warp" { flyEnterprise() }
-        else if url.hasPrefix("tricorder://sound-set") {
+        else if url.hasPrefix("tricorder://worktree") {
+            handleWorktreeClick(url)
+        } else if url.hasPrefix("tricorder://sound-set") {
             handleSoundSet(url)
+        }
+    }
+
+    // tricorder://worktree?path=...&mode=copy|both — the statusline routes the
+    // worktree link here whenever the configured click mode needs the app
+    // (a bare link can't write the clipboard on its own).
+    func handleWorktreeClick(_ url: String) {
+        guard let comps = URLComponents(string: url) else { return }
+        let items = comps.queryItems ?? []
+        let path = items.first(where: { $0.name == "path" })?.value ?? ""
+        let mode = items.first(where: { $0.name == "mode" })?.value ?? ""
+        guard !path.isEmpty else { return }
+        if mode == "copy" || mode == "both" {
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(path, forType: .string)
+        }
+        if mode == "both" {
+            NSWorkspace.shared.open(URL(fileURLWithPath: path))
         }
     }
 

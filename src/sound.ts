@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR, SOUNDS_DIR, ensureDir, loadConfig, type SoundEvent } from "./config";
+import { setLastSound } from "./state";
 import { log } from "./log";
 
 const AFPLAY = "/usr/bin/afplay";
@@ -47,7 +48,24 @@ function debounced(): boolean {
   return false;
 }
 
-export function playSound(eventArg: string | undefined): void {
+interface SoundHookInput {
+  readonly session_id?: string;
+}
+
+function isSoundHookInput(value: unknown): value is SoundHookInput {
+  return typeof value === "object" && value !== null;
+}
+
+function sessionFromStdin(raw: string): string {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isSoundHookInput(parsed) ? parsed.session_id ?? "" : "";
+  } catch {
+    return "";
+  }
+}
+
+export function playSound(eventArg: string | undefined, raw: string): void {
   if (!isSoundEvent(eventArg)) {
     log("sound " + (eventArg ?? "?") + " → invalid event");
     return;
@@ -72,6 +90,8 @@ export function playSound(eventArg: string | undefined): void {
     return;
   }
   log("sound " + eventArg + " → play " + entry.file);
+  const session = sessionFromStdin(raw);
+  if (session) setLastSound(session);
   // Detached fire-and-forget: the hook process can exit while the sound plays.
   const child = spawn(AFPLAY, [entry.file], { stdio: "ignore", detached: true });
   child.on("error", () => {

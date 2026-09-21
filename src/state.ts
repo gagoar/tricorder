@@ -109,6 +109,27 @@ export function getModel(sessionId: string): string | null {
   }
 }
 
+const SOUND_AT_FILE = "sound-at.txt";
+
+// Records the moment a sound actually played for this session (never on a
+// muted/disabled/debounced skip) — the menu-bar app uses this to mark exactly
+// which row just made noise, so several "mission complete" rows aren't
+// ambiguous about which one is current.
+export function setLastSound(sessionId: string): void {
+  const dir = sessionDir(sessionId);
+  ensureDir(dir);
+  writeFileSync(join(dir, SOUND_AT_FILE), String(Date.now()));
+}
+
+export function getLastSound(sessionId: string): number | null {
+  try {
+    const raw = Number(readFileSync(join(sessionDir(sessionId), SOUND_AT_FILE), "utf8").trim());
+    return Number.isFinite(raw) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
 const ATTENTION_FILE = "attention.json";
 const LABEL_FILE = "label.txt";
 const ITERM_FILE = "iterm.txt";
