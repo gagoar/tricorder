@@ -5,6 +5,16 @@ import { STATE_DIR, ensureDir, serialize } from "./config";
 export interface PR {
   readonly number: number | null;
   readonly url: string;
+  // The branch the PR was opened from — captured from the github MCP tool's
+  // `head` input, or `git branch --show-current` for `gh`/bash. Lets the
+  // statusline match a PR to the worktree/branch it belongs to. Absent on
+  // PRs captured before this field existed.
+  readonly branch?: string;
+}
+
+export interface WorktreeRef {
+  readonly path: string;
+  readonly branch: string;
 }
 
 export interface Subagent {
@@ -16,6 +26,8 @@ export interface Subagent {
 
 const JSON_EXT = ".json";
 const PRS_FILE = "prs.json";
+const WORKTREES_FILE = "worktrees.json";
+const MAX_WORKTREES = 8;
 const PLAN_FILE = "plan.txt";
 const MODEL_FILE = "model.txt";
 const SUBAGENTS_DIR = "subagents";
@@ -53,6 +65,29 @@ export function addPR(sessionId: string, pr: PR): void {
   );
   if (already) return;
   writeFileSync(join(dir, PRS_FILE), serialize([...prs, pr]));
+}
+
+// All PRs this session opened from the given branch — a branch can have more
+// than one (e.g. stacked follow-ups), so the statusline renders every match.
+export function prsForBranch(sessionId: string, branch: string): readonly PR[] {
+  return readPRs(sessionId).filter((p) => p.branch === branch);
+}
+
+export function readWorktrees(sessionId: string): readonly WorktreeRef[] {
+  return readJSON<readonly WorktreeRef[]>(join(sessionDir(sessionId), WORKTREES_FILE), []);
+}
+
+// Records a worktree the session has entered, so it stays reachable from the
+// statusline after switching away. Deduped by branch, not path — the same
+// worktree can be reported with a symlinked path (e.g. macOS's /tmp vs
+// /private/tmp) by different callers, but its branch is stable. Re-entering an
+// already-known branch just refreshes its path and moves it to the end; the
+// list is capped so a very long-lived session doesn't grow it without bound.
+export function addWorktree(sessionId: string, ref: WorktreeRef): void {
+  const dir = sessionDir(sessionId);
+  ensureDir(dir);
+  const rest = readWorktrees(sessionId).filter((w) => w.branch !== ref.branch);
+  writeFileSync(join(dir, WORKTREES_FILE), serialize([...rest, ref].slice(-MAX_WORKTREES)));
 }
 
 export function addSubagent(sessionId: string, id: string, data: Subagent): void {
