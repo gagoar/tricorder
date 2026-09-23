@@ -94,6 +94,8 @@ var import_node_path2 = require("node:path");
 var import_node_fs3 = require("node:fs");
 var JSON_EXT = ".json";
 var PRS_FILE = "prs.json";
+var WORKTREES_FILE = "worktrees.json";
+var MAX_WORKTREES = 8;
 var PLAN_FILE = "plan.txt";
 var MODEL_FILE = "model.txt";
 var SUBAGENTS_DIR = "subagents";
@@ -125,6 +127,18 @@ function addPR(sessionId, pr) {
   );
   if (already) return;
   (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, PRS_FILE), serialize([...prs, pr]));
+}
+function prsForBranch(sessionId, branch) {
+  return readPRs(sessionId).filter((p) => p.branch === branch);
+}
+function readWorktrees(sessionId) {
+  return readJSON((0, import_node_path2.join)(sessionDir(sessionId), WORKTREES_FILE), []);
+}
+function addWorktree(sessionId, ref) {
+  const dir = sessionDir(sessionId);
+  ensureDir(dir);
+  const rest = readWorktrees(sessionId).filter((w) => w.branch !== ref.branch);
+  (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, WORKTREES_FILE), serialize([...rest, ref].slice(-MAX_WORKTREES)));
 }
 function addSubagent(sessionId, id, data) {
   const dir = subagentsDir(sessionId);
@@ -262,6 +276,53 @@ function debugDump(name, raw) {
   }
 }
 
+// src/git.ts
+var import_node_child_process = require("node:child_process");
+var GIT_TIMEOUT_MS = 500;
+var BRANCH_PREFIX = "refs/heads/";
+function gitEnv() {
+  return { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
+}
+function run(args, cwd) {
+  try {
+    return (0, import_node_child_process.execFileSync)("git", args, {
+      cwd,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: GIT_TIMEOUT_MS,
+      encoding: "utf8",
+      env: gitEnv()
+    });
+  } catch {
+    return null;
+  }
+}
+function currentBranch(cwd) {
+  const out = run(["branch", "--show-current"], cwd);
+  if (out === null) return null;
+  const branch = out.trim();
+  return branch === "" ? null : branch;
+}
+var EMPTY_STATE = { entries: [], path: null, branch: null, bare: false };
+function flush(state) {
+  const entries = state.path !== null && !state.bare ? [...state.entries, { path: state.path, branch: state.branch }] : state.entries;
+  return { entries, path: null, branch: null, bare: false };
+}
+function parseLine(state, line) {
+  if (line === "") return flush(state);
+  if (line.startsWith("worktree ")) return { ...flush(state), path: line.slice("worktree ".length) };
+  if (line.startsWith("branch ")) {
+    const ref = line.slice("branch ".length);
+    return { ...state, branch: ref.startsWith(BRANCH_PREFIX) ? ref.slice(BRANCH_PREFIX.length) : ref };
+  }
+  if (line === "bare") return { ...state, bare: true };
+  return state;
+}
+function worktreeList(cwd) {
+  const out = run(["worktree", "list", "--porcelain"], cwd);
+  if (out === null) return [];
+  return flush(out.split("\n").reduce(parseLine, EMPTY_STATE)).entries;
+}
+
 // src/statusline.ts
 var ESC = "\x1B";
 var BEL = "\x07";
@@ -302,7 +363,6 @@ function visWidth(s) {
 }
 var ICON_MUTED = "\u{1F507}";
 var ICON_TREE = "\u{1F333}";
-var ICON_HELMET = "\u{1FA96}";
 var ICON_MAP = "\u{1F5FA}\uFE0F";
 var ICON_CTX = "\u{1F50B}";
 var ICON_ROBOT = "\u{1F916}";
@@ -337,20 +397,41 @@ function contextSegment(cw) {
   const pctInt = Math.round(computePct(cw, size, usedTokens(cw)));
   return ICON_CTX + " " + sgr(ctxColor(pctInt), pctInt + "%");
 }
-function worktreeSegment(p) {
+function resolveLocation(p, session) {
   const wt = p.worktree;
   const path = wt?.path ?? p.workspace?.current_dir ?? p.cwd ?? "";
-  if (path === "") return null;
-  const label = wt?.branch ?? wt?.name ?? ((0, import_node_path3.basename)(path) || path);
-  return worktreeLink(path, ICON_TREE + " " + label, loadConfig().worktreeClick);
+  if (path === "") return { path, branch: null, isWorktree: false };
+  const gitWorktree = p.workspace?.git_worktree;
+  if (wt !== void 0 || gitWorktree !== void 0) {
+    const branch = wt?.branch ?? wt?.name ?? gitWorktree ?? ((0, import_node_path3.basename)(path) || path);
+    if (session !== "") addWorktree(session, { path, branch });
+    return { path, branch, isWorktree: true };
+  }
+  return { path, branch: currentBranch(path), isWorktree: false };
+}
+function prSuffix(session, branch) {
+  if (session === "" || branch === null) return "";
+  return prsForBranch(session, branch).map((pr) => " " + osc8(pr.url, sgr(CYAN, "(" + (pr.number === null ? "PR" : "#" + pr.number) + ")"))).join("");
+}
+function locationSegment(loc, session, mode) {
+  if (loc.path === "") return null;
+  if (loc.isWorktree) {
+    const label = loc.branch ?? ((0, import_node_path3.basename)(loc.path) || loc.path);
+    return worktreeLink(loc.path, ICON_TREE + " " + label, mode) + prSuffix(session, loc.branch);
+  }
+  if (loc.branch !== null) {
+    const label = ((0, import_node_path3.basename)(loc.path) || loc.path) + "(" + loc.branch + ")";
+    return worktreeLink(loc.path, label, mode) + prSuffix(session, loc.branch);
+  }
+  return worktreeLink(loc.path, ICON_TREE + " " + ((0, import_node_path3.basename)(loc.path) || loc.path), mode);
 }
 function terminalWidth() {
   return Number(process.env.COLUMNS) || (process.stdout.columns ?? 0);
 }
-function line1(p, session) {
-  const muted = loadConfig().muted;
-  const mid = [worktreeSegment(p), contextSegment(p.context_window), p.model?.display_name ?? null].filter((s) => s !== null && s !== "").join(SEP);
-  const left = muted ? ICON_MUTED + " " + mid : mid;
+function line1(p, session, loc) {
+  const cfg = loadConfig();
+  const mid = [locationSegment(loc, session, cfg.worktreeClick), contextSegment(p.context_window), p.model?.display_name ?? null].filter((s) => s !== null && s !== "").join(SEP);
+  const left = cfg.muted ? ICON_MUTED + " " + mid : mid;
   const plan = session === "" ? null : getPlan(session);
   if (plan === null) return left;
   const right = openLink(plan, ICON_MAP + " " + sgr(DIM, "plan"));
@@ -358,11 +439,11 @@ function line1(p, session) {
   const gap = width > 0 ? Math.max(MARGIN, width - visWidth(left) - visWidth(right) - MARGIN) : MARGIN;
   return left + " ".repeat(gap) + right;
 }
-function prLine(session) {
-  const prs = readPRs(session);
-  if (prs.length === 0) return null;
-  const links = prs.map((pr) => osc8(pr.url, sgr(CYAN, pr.number === null ? "PR" : "#" + pr.number)));
-  return ICON_HELMET + " " + links.join("  ");
+function worktreeLine(session, loc) {
+  const others = readWorktrees(session).filter((w) => w.branch !== loc.branch);
+  if (others.length === 0) return null;
+  const mode = loadConfig().worktreeClick;
+  return others.map((w) => worktreeLink(w.path, w.branch, mode) + prSuffix(session, w.branch)).join("  ");
 }
 function subagentLine(session) {
   const subs = listSubagents(session);
@@ -391,10 +472,9 @@ function renderStatusline(raw) {
   const hasSession = session !== "";
   const model = payload.model?.display_name;
   if (hasSession && model !== void 0 && model !== "") setModel(session, model);
+  const loc = resolveLocation(payload, session);
   if (hasSession) {
-    const wt = payload.worktree;
-    const path = wt?.path ?? payload.workspace?.current_dir ?? payload.cwd ?? "";
-    setLabel(session, wt?.branch ?? wt?.name ?? ((0, import_node_path3.basename)(path) || session));
+    setLabel(session, loc.branch ?? ((0, import_node_path3.basename)(loc.path) || session));
     const iterm = process.env.ITERM_SESSION_ID;
     if (iterm !== void 0 && iterm !== "") setItermId(session, iterm);
   }
@@ -406,8 +486,8 @@ function renderStatusline(raw) {
     }
   }
   const lines = [
-    line1(payload, session),
-    hasSession ? prLine(session) : null,
+    line1(payload, session, loc),
+    hasSession ? worktreeLine(session, loc) : null,
     hasSession ? subagentLine(session) : null
   ].filter((l) => l !== null && l !== "");
   process.stdout.write(lines.join("\n") + "\n");
@@ -418,7 +498,7 @@ var import_node_buffer = require("node:buffer");
 var import_node_path5 = require("node:path");
 
 // src/iterm.ts
-var import_node_child_process = require("node:child_process");
+var import_node_child_process2 = require("node:child_process");
 var IT2 = "/Applications/iTerm.app/Contents/Resources/utilities/it2";
 var IT2_TIMEOUT_MS = 2e3;
 var VAR_PREFIX = "user.";
@@ -433,7 +513,7 @@ function setVar(name, value) {
   const guid = sessionGuid();
   if (guid === null) return;
   try {
-    (0, import_node_child_process.execFileSync)(
+    (0, import_node_child_process2.execFileSync)(
       IT2,
       ["session", "set-var", VAR_PREFIX + name, value, "--session", guid],
       { stdio: "ignore", timeout: IT2_TIMEOUT_MS }
@@ -495,12 +575,14 @@ var PR_URL_RE = /https?:\/\/[^\s"']*\/pull\/\d+/;
 var PR_NUM_RE = /\/pull\/(\d+)/;
 var GH_PR_CREATE_RE = /\bgh\b[\s\S]*\bpr\b[\s\S]*\bcreate\b/;
 var GH_PR_TOOL = "mcp__github__create_pull_request";
+var ENTER_WORKTREE_TOOL = "EnterWorktree";
 var ATTENTION_TOOLS = /* @__PURE__ */ new Set(["AskUserQuestion", "ExitPlanMode", "EnterPlanMode"]);
 var NOOP_REACTIONS = /* @__PURE__ */ new Set([
   "ignored",
   "not a plan path",
   "bash, not a pr create",
-  "no pr url in response"
+  "no pr url in response",
+  "no worktree target"
 ]);
 function str(value) {
   if (typeof value === "string") return value;
@@ -545,13 +627,30 @@ function extractPR(text) {
   const num = url.match(PR_NUM_RE)?.[1];
   return { number: num === void 0 ? null : Number(num), url };
 }
+function branchForPR(input) {
+  if (str(input.tool_name) === GH_PR_TOOL) {
+    const head = str(input.tool_input?.head);
+    return head === "" ? null : head;
+  }
+  return input.cwd ? currentBranch(input.cwd) : null;
+}
 function handlePR(session, input) {
   const tool = str(input.tool_name);
   if (tool === "Bash" && !GH_PR_CREATE_RE.test(str(input.tool_input?.command))) return "bash, not a pr create";
   const pr = extractPR(responseText(input.tool_response));
   if (pr === null) return "no pr url in response";
-  addPR(session, pr);
+  const branch = branchForPR(input);
+  addPR(session, branch === null ? pr : { ...pr, branch });
   return "pr " + pr.url;
+}
+function handleEnterWorktree(session, input) {
+  const target = str(input.tool_input?.path) || str(input.tool_input?.name);
+  if (target === "" || !input.cwd) return "no worktree target";
+  const name = (0, import_node_path5.basename)(target);
+  const entries = worktreeList(input.cwd);
+  const match = entries.find((e) => e.branch === name || (0, import_node_path5.basename)(e.path) === name);
+  addWorktree(session, { path: match?.path ?? target, branch: match?.branch ?? name });
+  return "worktree " + name;
 }
 function handlePlan(session, input) {
   const fp = str(input.tool_input?.file_path);
@@ -587,6 +686,7 @@ function route(session, input) {
   if (isActivity) setAttention(session, "working");
   if (event === "SubagentStart") return handleSubagentStart(session, input);
   if (event === "SubagentStop") return handleSubagentEnd(session, input);
+  if (event === "PostToolUse" && tool === ENTER_WORKTREE_TOOL) return handleEnterWorktree(session, input);
   if (event === "PostToolUse" && isPrTool) return handlePR(session, input);
   if (event === "PreToolUse" && (tool === "Write" || tool === "Edit")) return handlePlan(session, input);
   return "ignored";
@@ -633,7 +733,7 @@ function capture(raw) {
 }
 
 // src/sound.ts
-var import_node_child_process2 = require("node:child_process");
+var import_node_child_process3 = require("node:child_process");
 var import_node_fs5 = require("node:fs");
 var import_node_path6 = require("node:path");
 var AFPLAY = "/usr/bin/afplay";
@@ -705,7 +805,7 @@ function playSound(eventArg, raw) {
   log("sound " + eventArg + " \u2192 play " + entry.file);
   const session = sessionFromStdin(raw);
   if (session) setLastSound(session);
-  const child = (0, import_node_child_process2.spawn)(AFPLAY, [entry.file], { stdio: "ignore", detached: true });
+  const child = (0, import_node_child_process3.spawn)(AFPLAY, [entry.file], { stdio: "ignore", detached: true });
   child.on("error", () => {
   });
   child.unref();
@@ -972,13 +1072,13 @@ var COMMANDS = {
 };
 async function main() {
   const cmd = process.argv[CMD_INDEX] ?? "";
-  const run = COMMANDS[cmd];
-  if (run === void 0) {
+  const run2 = COMMANDS[cmd];
+  if (run2 === void 0) {
     process.stderr.write("tricorder: unknown command '" + cmd + "'\n");
     process.exit(EXIT_ERR);
   }
   try {
-    await run();
+    await run2();
   } catch (err) {
     process.stderr.write("tricorder: " + String(err) + "\n");
   }
