@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import {
   addPR,
   addSubagent,
+  addWorktree,
   debugDump,
   getModel,
   getPlan,
@@ -17,6 +18,7 @@ import {
   setPlan,
   type PR,
 } from "./state";
+import { currentBranch, worktreeList } from "./git";
 import { publish } from "./iterm";
 import { log } from "./log";
 
@@ -43,12 +45,14 @@ const PR_NUM_RE = /\/pull\/(\d+)/;
 const GH_PR_CREATE_RE = /\bgh\b[\s\S]*\bpr\b[\s\S]*\bcreate\b/;
 
 const GH_PR_TOOL = "mcp__github__create_pull_request";
+const ENTER_WORKTREE_TOOL = "EnterWorktree";
 const ATTENTION_TOOLS: ReadonlySet<string> = new Set(["AskUserQuestion", "ExitPlanMode", "EnterPlanMode"]);
 const NOOP_REACTIONS: ReadonlySet<string> = new Set([
   "ignored",
   "not a plan path",
   "bash, not a pr create",
   "no pr url in response",
+  "no worktree target",
 ]);
 
 function str(value: unknown): string {
@@ -105,13 +109,38 @@ function extractPR(text: string): PR | null {
   return { number: num === undefined ? null : Number(num), url };
 }
 
+// The github MCP tool names the branch directly (`head`); a `gh`/bash PR
+// create has to ask git for the branch it's currently on.
+function branchForPR(input: HookInput): string | null {
+  if (str(input.tool_name) === GH_PR_TOOL) {
+    const head = str(input.tool_input?.head);
+    return head === "" ? null : head;
+  }
+  return input.cwd ? currentBranch(input.cwd) : null;
+}
+
 function handlePR(session: string, input: HookInput): string {
   const tool = str(input.tool_name);
   if (tool === "Bash" && !GH_PR_CREATE_RE.test(str(input.tool_input?.command))) return "bash, not a pr create";
   const pr = extractPR(responseText(input.tool_response));
   if (pr === null) return "no pr url in response";
-  addPR(session, pr);
+  const branch = branchForPR(input);
+  addPR(session, branch === null ? pr : { ...pr, branch });
   return "pr " + pr.url;
+}
+
+// EnterWorktree switches the session into a worktree by `path` (existing) or
+// `name` (newly created) — both relative, so resolve the exact absolute path
+// and true branch via `git worktree list` rather than guessing a join. Only
+// fires on this (infrequent) tool event, never per statusline render.
+function handleEnterWorktree(session: string, input: HookInput): string {
+  const target = str(input.tool_input?.path) || str(input.tool_input?.name);
+  if (target === "" || !input.cwd) return "no worktree target";
+  const name = basename(target);
+  const entries = worktreeList(input.cwd);
+  const match = entries.find((e) => e.branch === name || basename(e.path) === name);
+  addWorktree(session, { path: match?.path ?? target, branch: match?.branch ?? name });
+  return "worktree " + name;
 }
 
 function handlePlan(session: string, input: HookInput): string {
@@ -153,6 +182,7 @@ function route(session: string, input: HookInput): string {
   if (isActivity) setAttention(session, "working");
   if (event === "SubagentStart") return handleSubagentStart(session, input);
   if (event === "SubagentStop") return handleSubagentEnd(session, input);
+  if (event === "PostToolUse" && tool === ENTER_WORKTREE_TOOL) return handleEnterWorktree(session, input);
   if (event === "PostToolUse" && isPrTool) return handlePR(session, input);
   if (event === "PreToolUse" && (tool === "Write" || tool === "Edit")) return handlePlan(session, input);
   return "ignored";

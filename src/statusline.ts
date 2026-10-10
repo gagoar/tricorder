@@ -1,14 +1,17 @@
 import { basename } from "node:path";
 import { loadConfig, type WorktreeClickMode } from "./config";
 import {
+  addWorktree,
   getPlan,
   introElapsed,
   listSubagents,
-  readPRs,
+  prsForBranch,
+  readWorktrees,
   setItermId,
   setLabel,
   setModel,
 } from "./state";
+import { currentBranch } from "./git";
 
 // ---- payload shape (subset of the statusline stdin JSON) -------------------
 
@@ -105,7 +108,6 @@ function visWidth(s: string): number {
 
 const ICON_MUTED = "🔇";
 const ICON_TREE = "🌳";
-const ICON_HELMET = "🪖";
 const ICON_MAP = "🗺️";
 const ICON_CTX = "🔋";
 const ICON_ROBOT = "🤖";
@@ -145,27 +147,67 @@ function contextSegment(cw: ContextWindow | undefined): string | null {
   return ICON_CTX + " " + sgr(ctxColor(pctInt), pctInt + "%");
 }
 
-// ---- segments --------------------------------------------------------------
+// ---- location (worktree / branch) + PR matching -----------------------------
 
-function worktreeSegment(p: Payload): string | null {
+// Claude Code only sends `worktree` / `workspace.git_worktree` inside a
+// worktree session — a plain repo carries neither, and the current branch is
+// never in the payload at all. `isWorktree` distinguishes the two so line 1 can
+// choose "🌳 branch" vs "dir(branch)".
+interface Location {
+  readonly path: string;
+  readonly branch: string | null;
+  readonly isWorktree: boolean;
+}
+
+function resolveLocation(p: Payload, session: string): Location {
   const wt = p.worktree;
   const path = wt?.path ?? p.workspace?.current_dir ?? p.cwd ?? "";
-  if (path === "") return null;
-  const label = wt?.branch ?? wt?.name ?? (basename(path) || path);
-  return worktreeLink(path, ICON_TREE + " " + label, loadConfig().worktreeClick);
+  if (path === "") return { path, branch: null, isWorktree: false };
+  const gitWorktree = p.workspace?.git_worktree;
+  if (wt !== undefined || gitWorktree !== undefined) {
+    const branch = wt?.branch ?? wt?.name ?? gitWorktree ?? (basename(path) || path);
+    if (session !== "") addWorktree(session, { path, branch });
+    return { path, branch, isWorktree: true };
+  }
+  return { path, branch: currentBranch(path), isWorktree: false };
+}
+
+// Every session PR opened from `branch`, rendered as clickable "(#11)" tags —
+// a branch can carry more than one (e.g. stacked follow-ups).
+function prSuffix(session: string, branch: string | null): string {
+  if (session === "" || branch === null) return "";
+  return prsForBranch(session, branch)
+    .map((pr) => " " + osc8(pr.url, sgr(CYAN, "(" + (pr.number === null ? "PR" : "#" + pr.number) + ")")))
+    .join("");
+}
+
+// ---- segments --------------------------------------------------------------
+
+function locationSegment(loc: Location, session: string, mode: WorktreeClickMode): string | null {
+  if (loc.path === "") return null;
+  if (loc.isWorktree) {
+    const label = loc.branch ?? (basename(loc.path) || loc.path);
+    return worktreeLink(loc.path, ICON_TREE + " " + label, mode) + prSuffix(session, loc.branch);
+  }
+  if (loc.branch !== null) {
+    const label = (basename(loc.path) || loc.path) + "(" + loc.branch + ")";
+    return worktreeLink(loc.path, label, mode) + prSuffix(session, loc.branch);
+  }
+  // Non-git directory: today's fallback, no branch to show.
+  return worktreeLink(loc.path, ICON_TREE + " " + (basename(loc.path) || loc.path), mode);
 }
 
 function terminalWidth(): number {
   return Number(process.env.COLUMNS) || (process.stdout.columns ?? 0);
 }
 
-function line1(p: Payload, session: string): string {
-  const muted = loadConfig().muted;
-  const mid = [worktreeSegment(p), contextSegment(p.context_window), p.model?.display_name ?? null]
+function line1(p: Payload, session: string, loc: Location): string {
+  const cfg = loadConfig();
+  const mid = [locationSegment(loc, session, cfg.worktreeClick), contextSegment(p.context_window), p.model?.display_name ?? null]
     .filter((s): s is string => s !== null && s !== "")
     .join(SEP);
   // Passive mute indicator only (audio control lives in the menu-bar app now).
-  const left = muted ? ICON_MUTED + " " + mid : mid;
+  const left = cfg.muted ? ICON_MUTED + " " + mid : mid;
   const plan = session === "" ? null : getPlan(session);
   if (plan === null) return left;
   const right = openLink(plan, ICON_MAP + " " + sgr(DIM, "plan"));
@@ -174,11 +216,16 @@ function line1(p: Payload, session: string): string {
   return left + " ".repeat(gap) + right;
 }
 
-function prLine(session: string): string | null {
-  const prs = readPRs(session);
-  if (prs.length === 0) return null;
-  const links = prs.map((pr) => osc8(pr.url, sgr(CYAN, pr.number === null ? "PR" : "#" + pr.number)));
-  return ICON_HELMET + " " + links.join("  ");
+// The other worktrees this session has entered (the current one is already on
+// line 1), each a clickable link with its matched PR(s) inline. Only appears
+// once the session has actually switched — never a repo-wide worktree list.
+// Excluded by branch, not path — a symlinked path (macOS /tmp vs /private/tmp)
+// can make the same worktree look like two different paths.
+function worktreeLine(session: string, loc: Location): string | null {
+  const others = readWorktrees(session).filter((w) => w.branch !== loc.branch);
+  if (others.length === 0) return null;
+  const mode = loadConfig().worktreeClick;
+  return others.map((w) => worktreeLink(w.path, w.branch, mode) + prSuffix(session, w.branch)).join("  ");
 }
 
 // All running sub-agents on one compact line: "🤖 Explore Opus 4.8, review Sonnet 5".
@@ -213,11 +260,10 @@ export function renderStatusline(raw: string): void {
   const hasSession = session !== "";
   const model = payload.model?.display_name;
   if (hasSession && model !== undefined && model !== "") setModel(session, model);
+  const loc = resolveLocation(payload, session);
   if (hasSession) {
     // Stash label + iTerm session id for the menu-bar app.
-    const wt = payload.worktree;
-    const path = wt?.path ?? payload.workspace?.current_dir ?? payload.cwd ?? "";
-    setLabel(session, wt?.branch ?? wt?.name ?? (basename(path) || session));
+    setLabel(session, loc.branch ?? (basename(loc.path) || session));
     const iterm = process.env.ITERM_SESSION_ID;
     if (iterm !== undefined && iterm !== "") setItermId(session, iterm);
   }
@@ -229,8 +275,8 @@ export function renderStatusline(raw: string): void {
     }
   }
   const lines = [
-    line1(payload, session),
-    hasSession ? prLine(session) : null,
+    line1(payload, session, loc),
+    hasSession ? worktreeLine(session, loc) : null,
     hasSession ? subagentLine(session) : null,
   ].filter((l): l is string => l !== null && l !== "");
   process.stdout.write(lines.join("\n") + "\n");

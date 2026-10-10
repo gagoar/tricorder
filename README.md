@@ -42,7 +42,7 @@ runtime (or the optional dependency-free build below).
 
 ## Features
 
-- **Multi-line statusline** — worktree link, a color-graded context-window gauge, model, PR links, running sub-agents with their model, and a plan-file link. Only non-empty lines render. A one-shot mini-ship animation greets each new session.
+- **Multi-line statusline** — a branch-aware location link (current worktree, or `dir(branch)` in a plain repo), a color-graded context-window gauge, model, running sub-agents with their model, and a plan-file link. If you switch worktrees mid-session, the others you've visited list underneath, each with its matched PR shown inline. Only non-empty lines render. A one-shot mini-ship animation greets each new session.
 - **Away-team menu bar** — one icon reflects the highest-priority state across every session (🔴 security, 🟡 question, 🟢 done). Click a row to focus that session's iTerm2 tab, wherever it is. A 🔊 marks whichever row's sound just played, so several "mission complete" rows aren't ambiguous about which one is current.
 - **Restore Sessions** — after a crash or reboot, reopen whole project families in fresh iTerm2 windows with one click, grouped automatically by directory.
 - **Attention klaxons** — four Star Trek voice/chime cues, muted by default, toggled per-event from the menu.
