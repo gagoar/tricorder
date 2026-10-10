@@ -1,5 +1,6 @@
 {
   "name": "tricorder",
+  "description": "Always-on Claude Code session panel and attention sounds.",
   "owner": { "name": "gagoar" },
   "plugins": [
     {

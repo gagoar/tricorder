@@ -181,3 +181,18 @@ so opening it is instant no matter how much is going on.
 ## License
 
 [MIT](LICENSE) for the code. See Credits above for the icon and sound provenance, which carry their own terms.
+
+## Automated gate
+
+CI runs `scripts/check-plugin-safety.ts` and `claude plugin validate --strict` on every PR. Run both before you push:
+
+```
+node scripts/check-plugin-safety.ts plugin src
+claude plugin validate . --strict
+```
+
+The gate fails on three things the plugin-directory upload scanner holds for review:
+
+- A skill, agent, or command that pre-approves `Write`, `Edit`, or `Bash` with no path scope. Write `Write(./docs/**)`, not `Write`.
+- Shipped code that copies the whole environment (`...process.env`, `Object.keys(process.env)`). Read the named variables you need.
+- A committed native executable. The scanner cannot read it.
