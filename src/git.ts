@@ -6,8 +6,29 @@ import { execFileSync } from "node:child_process";
 const GIT_TIMEOUT_MS = 500;
 const BRANCH_PREFIX = "refs/heads/";
 
+// The git calls here are local-only (branch, worktree list), so they need a working
+// PATH/HOME and git's own location variables, not the whole environment. Passing the
+// full environment would hand every secret in it to a child process.
+const GIT_ENV_ALLOWLIST: readonly string[] = [
+  "PATH",
+  "HOME",
+  "LANG",
+  "LC_ALL",
+  "TMPDIR",
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_CONFIG_GLOBAL",
+  "XDG_CONFIG_HOME",
+];
+
 function gitEnv(): NodeJS.ProcessEnv {
-  return { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
+  const inherited = Object.fromEntries(
+    GIT_ENV_ALLOWLIST.flatMap((key) => {
+      const value = process.env[key];
+      return value === undefined ? [] : [[key, value] as const];
+    }),
+  );
+  return { ...inherited, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
 }
 
 function run(args: readonly string[], cwd: string): string | null {

@@ -280,8 +280,25 @@ function debugDump(name, raw) {
 var import_node_child_process = require("node:child_process");
 var GIT_TIMEOUT_MS = 500;
 var BRANCH_PREFIX = "refs/heads/";
+var GIT_ENV_ALLOWLIST = [
+  "PATH",
+  "HOME",
+  "LANG",
+  "LC_ALL",
+  "TMPDIR",
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_CONFIG_GLOBAL",
+  "XDG_CONFIG_HOME"
+];
 function gitEnv() {
-  return { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
+  const inherited = Object.fromEntries(
+    GIT_ENV_ALLOWLIST.flatMap((key) => {
+      const value = process.env[key];
+      return value === void 0 ? [] : [[key, value]];
+    })
+  );
+  return { ...inherited, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
 }
 function run(args, cwd) {
   try {
