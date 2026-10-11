@@ -58,6 +58,9 @@ jobs:
           npm run build
           git diff --exit-code -- plugin/bin/tricorder
 
+      - name: Install iTerm2 (the URL handler's AppleScript uses its vocabulary, so it only compiles where iTerm2 is installed)
+        run: brew install --cask iterm2
+
       - name: Build the menu-bar app and the URL handler
         run: |
           npm run build:bar
