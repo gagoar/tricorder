@@ -1,0 +1,83 @@
+name: release-artifacts
+
+# Builds tricorder's shippable pieces on a macOS runner and attaches them to the
+# GitHub Release:
+#   tricorder              the CLI bundle (what plugin/bin/tricorder is)
+#   TricorderBar-macos-arm64.zip           the menu-bar app (ad-hoc signed)
+#   Tricorder-url-handler-macos.zip        the tricorder:// URL handler app
+#   SHA256SUMS
+# The CLI bundle is rebuilt and must match the committed plugin/bin/tricorder, so
+# the attached file is exactly what the plugin runs.
+#   - pull request: build and verify only; nothing is published
+#   - push of a v* tag: build, verify, publish to that tag's release
+#   - manual run: attach to an EXISTING release (give the tag)
+# Uses the workflow's own GITHUB_TOKEN; no PAT.
+
+on:
+  pull_request:
+    paths: ["src/**", "bar/**", "plugin/handler/**", "build-*.sh", "package*.json", ".github/workflows/release-artifacts.yml"]
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to attach the artifacts to (e.g. v0.1.1)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  artifacts:
+    runs-on: macos-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Tag matches plugin.json
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          want="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' plugin/.claude-plugin/plugin.json | head -1)"
+          [ "$TAG" = "v$want" ] || { echo "tag $TAG != v$want (plugin.json)"; exit 1; }
+
+      - name: Install and typecheck
+        run: |
+          npm ci
+          npm run typecheck
+
+      - name: Build the CLI bundle; the committed one must reproduce
+        run: |
+          npm run build
+          git diff --exit-code -- plugin/bin/tricorder
+
+      - name: Build the menu-bar app and the URL handler
+        run: |
+          npm run build:bar
+          npm run build:handler
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp plugin/bin/tricorder out/tricorder
+          ditto -c -k --keepParent plugin/bar/TricorderBar.app out/TricorderBar-macos-arm64.zip
+          ditto -c -k --keepParent plugin/handler/Tricorder.app out/Tricorder-url-handler-macos.zip
+          ( cd out && shasum -a 256 tricorder TricorderBar-macos-arm64.zip Tricorder-url-handler-macos.zip > SHA256SUMS )
+          cat out/SHA256SUMS
+
+      - name: Publish to the release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes
+          gh release upload "$TAG" out/* --clobber
