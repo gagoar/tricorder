@@ -99,6 +99,15 @@ launchctl load ~/Library/LaunchAgents/com.gago.tricorder.bar.plist
 ```
 The first time it focuses a session or restores one, macOS asks permission for Tricorder to control iTerm2 — allow it. No `/plugin install` step needed for this path.
 
+### Menu-bar app from a release (Apple Silicon)
+Skip the build: each [release](https://github.com/gagoar/tricorder/releases) attaches a prebuilt `TricorderBar-macos-arm64.zip`, the `tricorder://` URL handler, and `SHA256SUMS`. CI builds them on a macOS runner; the apps are ad-hoc signed, not notarized.
+```
+gh release download --repo gagoar/tricorder -p 'TricorderBar-macos-arm64.zip' -p SHA256SUMS
+shasum -a 256 -c SHA256SUMS --ignore-missing
+unzip -q TricorderBar-macos-arm64.zip -d ~/Applications
+```
+Then load the LaunchAgent as in the steps above. If you download the zip in a browser instead, macOS quarantines it ("cannot be opened because the developer cannot be verified"); clear that with `xattr -dr com.apple.quarantine ~/Applications/TricorderBar.app`. Intel Macs build from source with `npm run build:bar`.
+
 ### Both (recommended)
 Do the Statusline steps, then the Menu-bar app steps. This is the intended full experience and the only path that gets you nice session labels immediately (see Known limitations below).
 
