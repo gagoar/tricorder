@@ -59,7 +59,12 @@ jobs:
           git diff --exit-code -- plugin/bin/tricorder
 
       - name: Install iTerm2 (the URL handler's AppleScript uses its vocabulary, so it only compiles where iTerm2 is installed)
-        run: brew install --cask iterm2
+        run: |
+          brew install --cask iterm2
+          # A fresh install is not known to Launch Services, so AppleScript cannot
+          # resolve the "iTerm2" application name to its scripting dictionary yet.
+          /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/iTerm.app
+          osascript -e 'tell application "Finder" to get name of application file id "com.googlecode.iterm2"' || true
 
       - name: Build the menu-bar app and the URL handler
         run: |
