@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { buildFields, defaultFields, type FieldId } from "./fields";
 
 const JSON_INDENT = 2;
 
@@ -34,9 +35,15 @@ export function isWorktreeClickMode(value: unknown): value is WorktreeClickMode 
   return (WORKTREE_CLICK_MODES as readonly unknown[]).includes(value);
 }
 
+// Which statusline fields are drawn (see src/fields.ts for the list).
+export interface StatuslineConfig {
+  readonly fields: Readonly<Record<FieldId, boolean>>;
+}
+
 export interface Config {
   muted: boolean;
   worktreeClick: WorktreeClickMode;
+  statusline: StatuslineConfig;
   readonly sounds: Record<SoundEvent, SoundEntry>;
 }
 
@@ -44,6 +51,8 @@ export const DEFAULT_CONFIG: Config = {
   // Sounds off by default; turn them on from the menu-bar app.
   muted: true,
   worktreeClick: "open",
+  // Every field on, so nothing changes for an existing user until they choose.
+  statusline: { fields: defaultFields() },
   sounds: {
     // "Please specify how you would like to proceed" — plays when Claude waits
     // on you (Notification / AskUserQuestion).
@@ -83,7 +92,17 @@ export function loadConfig(): Config {
   }
 }
 
-function mergeConfig(base: Config, override: Partial<Config>): Config {
+function mergeStatusline(base: StatuslineConfig, override: Partial<StatuslineConfig> | undefined): StatuslineConfig {
+  // Cast: the config file is user-edited JSON, so each value is checked with typeof below.
+  const given = override?.fields as Partial<Record<string, unknown>> | undefined;
+  const fields = buildFields((id) => {
+    const value = given?.[id];
+    return typeof value === "boolean" ? value : base.fields[id];
+  });
+  return { fields };
+}
+
+export function mergeConfig(base: Config, override: Partial<Config>): Config {
   const events = Object.keys(base.sounds) as readonly SoundEvent[];
   const sounds = Object.fromEntries(
     events.map((key) => {
@@ -94,6 +113,7 @@ function mergeConfig(base: Config, override: Partial<Config>): Config {
   return {
     muted: typeof override.muted === "boolean" ? override.muted : base.muted,
     worktreeClick: isWorktreeClickMode(override.worktreeClick) ? override.worktreeClick : base.worktreeClick,
+    statusline: mergeStatusline(base.statusline, override.statusline),
     sounds,
   };
 }

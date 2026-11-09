@@ -19,6 +19,94 @@ var import_node_path3 = require("node:path");
 var import_node_os = require("node:os");
 var import_node_path = require("node:path");
 var import_node_fs2 = require("node:fs");
+
+// src/fields.ts
+var FIELDS = [
+  {
+    id: "muteIcon",
+    name: "Mute icon",
+    shows: "A speaker icon at the start of the line while sounds are muted.",
+    sample: "\u{1F507}",
+    legend: "\u{1F507} = sounds are muted.",
+    defaultOn: true
+  },
+  {
+    id: "location",
+    name: "Location",
+    shows: "The folder and branch you are working in, as a clickable link. In a worktree session it shows the branch with a tree icon.",
+    sample: "my-repo(main)   or   \u{1F333} fix-login",
+    legend: "Clicking opens the folder, copies the path, or both (see worktreeClick in the config).",
+    defaultOn: true
+  },
+  {
+    id: "prs",
+    name: "Pull requests",
+    shows: "A clickable tag for each pull request this session opened from the current branch.",
+    sample: "(#12)",
+    legend: "Cyan.",
+    defaultOn: true
+  },
+  {
+    id: "context",
+    name: "Context window",
+    shows: "How full the model's context window is.",
+    sample: "\u{1F50B} 42%",
+    legend: "\u{1F50B} = context window. Green below 70%, yellow 70-89%, red from 90%.",
+    defaultOn: true
+  },
+  {
+    id: "model",
+    name: "Model",
+    shows: "The name of the model this session is using.",
+    sample: "Opus 5.5",
+    legend: "",
+    defaultOn: true
+  },
+  {
+    id: "plan",
+    name: "Plan link",
+    shows: "A link to the current plan file, at the right edge, once the session has one.",
+    sample: "\u{1F5FA}\uFE0F plan",
+    legend: "\u{1F5FA}\uFE0F = plan file. Grey text.",
+    defaultOn: true
+  },
+  {
+    id: "worktrees",
+    name: "Other worktrees",
+    shows: "A second line listing the other worktrees this session has visited, each with its pull requests.",
+    sample: "fix-login (#12)  add-tests",
+    legend: "",
+    defaultOn: true
+  },
+  {
+    id: "subagents",
+    name: "Sub-agents",
+    shows: "A line listing the sub-agents running right now, with the model each one uses.",
+    sample: "\u{1F916} Explore Opus 4.8, review Sonnet 5",
+    legend: "\u{1F916} = sub-agents. Model names in grey.",
+    defaultOn: true
+  },
+  {
+    id: "intro",
+    name: "Start-up animation",
+    shows: "A small ship that crosses the line for the first 4 seconds of a session.",
+    sample: "o\u2261\u2261\u2261>",
+    legend: "Cyan.",
+    defaultOn: true
+  }
+];
+var FIELD_IDS = FIELDS.map((f) => f.id);
+function isFieldId(value) {
+  return FIELD_IDS.includes(value);
+}
+function buildFields(valueFor) {
+  return Object.fromEntries(FIELD_IDS.map((id) => [id, valueFor(id)]));
+}
+function defaultFields() {
+  return buildFields((id) => FIELDS.some((f) => f.id === id && f.defaultOn));
+}
+
+// src/config.ts
 var JSON_INDENT = 2;
 var DATA_DIR = (0, import_node_path.join)((0, import_node_os.homedir)(), ".claude", "tricorder");
 var CONFIG_PATH = (0, import_node_path.join)(DATA_DIR, "config.json");
@@ -36,6 +124,8 @@ var DEFAULT_CONFIG = {
   // Sounds off by default; turn them on from the menu-bar app.
   muted: true,
   worktreeClick: "open",
+  // Every field on, so nothing changes for an existing user until they choose.
+  statusline: { fields: defaultFields() },
   sounds: {
     // "Please specify how you would like to proceed" — plays when Claude waits
     // on you (Notification / AskUserQuestion).
@@ -70,6 +160,14 @@ function loadConfig() {
     return structuredClone(DEFAULT_CONFIG);
   }
 }
+function mergeStatusline(base, override) {
+  const given = override?.fields;
+  const fields2 = buildFields((id) => {
+    const value = given?.[id];
+    return typeof value === "boolean" ? value : base.fields[id];
+  });
+  return { fields: fields2 };
+}
 function mergeConfig(base, override) {
   const events = Object.keys(base.sounds);
   const sounds = Object.fromEntries(
@@ -81,6 +179,7 @@ function mergeConfig(base, override) {
   return {
     muted: typeof override.muted === "boolean" ? override.muted : base.muted,
     worktreeClick: isWorktreeClickMode(override.worktreeClick) ? override.worktreeClick : base.worktreeClick,
+    statusline: mergeStatusline(base.statusline, override.statusline),
     sounds
   };
 }
@@ -430,37 +529,43 @@ function prSuffix(session, branch) {
   if (session === "" || branch === null) return "";
   return prsForBranch(session, branch).map((pr) => " " + osc8(pr.url, sgr(CYAN, "(" + (pr.number === null ? "PR" : "#" + pr.number) + ")"))).join("");
 }
-function locationSegment(loc, session, mode) {
+function locationSegment(loc, session, mode, showPrs) {
   if (loc.path === "") return null;
+  const prs = (branch) => showPrs ? prSuffix(session, branch) : "";
   if (loc.isWorktree) {
     const label = loc.branch ?? ((0, import_node_path3.basename)(loc.path) || loc.path);
-    return worktreeLink(loc.path, ICON_TREE + " " + label, mode) + prSuffix(session, loc.branch);
+    return worktreeLink(loc.path, ICON_TREE + " " + label, mode) + prs(loc.branch);
   }
   if (loc.branch !== null) {
     const label = ((0, import_node_path3.basename)(loc.path) || loc.path) + "(" + loc.branch + ")";
-    return worktreeLink(loc.path, label, mode) + prSuffix(session, loc.branch);
+    return worktreeLink(loc.path, label, mode) + prs(loc.branch);
   }
   return worktreeLink(loc.path, ICON_TREE + " " + ((0, import_node_path3.basename)(loc.path) || loc.path), mode);
 }
 function terminalWidth() {
   return Number(process.env.COLUMNS) || (process.stdout.columns ?? 0);
 }
-function line1(p, session, loc) {
-  const cfg = loadConfig();
-  const mid = [locationSegment(loc, session, cfg.worktreeClick), contextSegment(p.context_window), p.model?.display_name ?? null].filter((s) => s !== null && s !== "").join(SEP);
-  const left = cfg.muted ? ICON_MUTED + " " + mid : mid;
-  const plan = session === "" ? null : getPlan(session);
+function line1(p, session, loc, cfg) {
+  const on = cfg.statusline.fields;
+  const mid = [
+    on.location ? locationSegment(loc, session, cfg.worktreeClick, on.prs) : null,
+    on.context ? contextSegment(p.context_window) : null,
+    on.model ? p.model?.display_name ?? null : null
+  ].filter((s) => s !== null && s !== "").join(SEP);
+  const showMute = cfg.muted && on.muteIcon;
+  const left = showMute ? [ICON_MUTED, mid].filter(Boolean).join(" ") : mid;
+  const plan = !session || !on.plan ? null : getPlan(session);
   if (plan === null) return left;
   const right = openLink(plan, ICON_MAP + " " + sgr(DIM, "plan"));
   const width = terminalWidth();
   const gap = width > 0 ? Math.max(MARGIN, width - visWidth(left) - visWidth(right) - MARGIN) : MARGIN;
   return left + " ".repeat(gap) + right;
 }
-function worktreeLine(session, loc) {
+function worktreeLine(session, loc, cfg) {
   const others = readWorktrees(session).filter((w) => w.branch !== loc.branch);
-  if (others.length === 0) return null;
-  const mode = loadConfig().worktreeClick;
-  return others.map((w) => worktreeLink(w.path, w.branch, mode) + prSuffix(session, w.branch)).join("  ");
+  if (!others.length) return null;
+  const showPrs = cfg.statusline.fields.prs;
+  return others.map((w) => worktreeLink(w.path, w.branch, cfg.worktreeClick) + (showPrs ? prSuffix(session, w.branch) : "")).join("  ");
 }
 function subagentLine(session) {
   const subs = listSubagents(session);
@@ -495,7 +600,9 @@ function renderStatusline(raw) {
     const iterm = process.env.ITERM_SESSION_ID;
     if (iterm !== void 0 && iterm !== "") setItermId(session, iterm);
   }
-  if (hasSession) {
+  const cfg = loadConfig();
+  const on = cfg.statusline.fields;
+  if (hasSession && on.intro) {
     const el = introElapsed(session);
     if (el < ANIM_MS) {
       process.stdout.write(introFrame(el) + "\n");
@@ -503,9 +610,9 @@ function renderStatusline(raw) {
     }
   }
   const lines = [
-    line1(payload, session, loc),
-    hasSession ? worktreeLine(session, loc) : null,
-    hasSession ? subagentLine(session) : null
+    line1(payload, session, loc, cfg),
+    hasSession && on.worktrees ? worktreeLine(session, loc, cfg) : null,
+    hasSession && on.subagents ? subagentLine(session) : null
   ].filter((l) => l !== null && l !== "");
   process.stdout.write(lines.join("\n") + "\n");
 }
@@ -1068,6 +1175,56 @@ function worktreeClick(arg) {
   process.stdout.write(mode + "\n");
 }
 
+// src/fieldscmd.ts
+var ALL = "all";
+function describeFields() {
+  const cfg = loadConfig();
+  const out = FIELDS.map((f) => ({
+    id: f.id,
+    name: f.name,
+    shows: f.shows,
+    sample: f.sample,
+    legend: f.legend,
+    enabled: cfg.statusline.fields[f.id]
+  }));
+  process.stdout.write(serialize({ fields: out }));
+}
+function parseFieldList(arg) {
+  if (arg.trim().toLowerCase() === ALL) return { ids: FIELD_IDS, unknown: [] };
+  const parts = arg.split(",").map((p) => p.trim()).filter(Boolean);
+  return { ids: parts.filter(isFieldId), unknown: parts.filter((p) => !isFieldId(p)) };
+}
+function setFields(arg) {
+  const { ids, unknown } = parseFieldList(arg ?? "");
+  if (unknown.length) {
+    process.stderr.write("tricorder: unknown field(s): " + unknown.join(", ") + "\nvalid: " + FIELD_IDS.join(", ") + "\n");
+    process.exitCode = 1;
+    return;
+  }
+  if (!ids.length) {
+    process.stdout.write("no fields given; nothing changed\n");
+    return;
+  }
+  const cfg = loadConfig();
+  const fields2 = buildFields((id) => ids.includes(id));
+  saveConfig({ ...cfg, statusline: { fields: fields2 } });
+  log("fields set \u2192 " + ids.join(","));
+  process.stdout.write("on: " + ids.join(", ") + "\n");
+}
+var SUBCOMMANDS = {
+  describe: () => describeFields(),
+  set: setFields
+};
+var USAGE = "usage: tricorder fields describe | fields set <id,id,...|all>\n";
+function isSubCommand(name) {
+  return name !== void 0 && Object.hasOwn(SUBCOMMANDS, name);
+}
+function fields(sub, arg) {
+  if (isSubCommand(sub)) return SUBCOMMANDS[sub](arg);
+  process.stderr.write(USAGE);
+  process.exitCode = 1;
+}
+
 // src/main.ts
 var CMD_INDEX = 2;
 var ARG_INDEX = 3;
@@ -1080,6 +1237,7 @@ var COMMANDS = {
   sound: () => playSound(process.argv[ARG_INDEX], readStdin()),
   mute: () => mute(process.argv[ARG_INDEX]),
   "worktree-click": () => worktreeClick(process.argv[ARG_INDEX]),
+  fields: () => fields(process.argv[ARG_INDEX], process.argv[ARG2_INDEX]),
   warp: () => warp(),
   logs: () => showLogs(process.argv[ARG_INDEX]),
   status: () => status(),

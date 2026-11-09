@@ -8,6 +8,7 @@ import { showLogs } from "./log";
 import { ack, soundEnable, status } from "./status";
 import { soundSet } from "./catalog";
 import { worktreeClick } from "./worktreeclick";
+import { fields } from "./fieldscmd";
 
 const CMD_INDEX = 2;
 const ARG_INDEX = 3;
@@ -21,6 +22,7 @@ const COMMANDS: Readonly<Record<string, () => void | Promise<void>>> = {
   sound: () => playSound(process.argv[ARG_INDEX], readStdin()),
   mute: () => mute(process.argv[ARG_INDEX]),
   "worktree-click": () => worktreeClick(process.argv[ARG_INDEX]),
+  fields: () => fields(process.argv[ARG_INDEX], process.argv[ARG2_INDEX]),
   warp: () => warp(),
   logs: () => showLogs(process.argv[ARG_INDEX]),
   status: () => status(),

@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { loadConfig, type WorktreeClickMode } from "./config";
+import { loadConfig, type Config, type WorktreeClickMode } from "./config";
 import {
   addWorktree,
   getPlan,
@@ -183,15 +183,16 @@ function prSuffix(session: string, branch: string | null): string {
 
 // ---- segments --------------------------------------------------------------
 
-function locationSegment(loc: Location, session: string, mode: WorktreeClickMode): string | null {
+function locationSegment(loc: Location, session: string, mode: WorktreeClickMode, showPrs: boolean): string | null {
   if (loc.path === "") return null;
+  const prs = (branch: string | null): string => (showPrs ? prSuffix(session, branch) : "");
   if (loc.isWorktree) {
     const label = loc.branch ?? (basename(loc.path) || loc.path);
-    return worktreeLink(loc.path, ICON_TREE + " " + label, mode) + prSuffix(session, loc.branch);
+    return worktreeLink(loc.path, ICON_TREE + " " + label, mode) + prs(loc.branch);
   }
   if (loc.branch !== null) {
     const label = (basename(loc.path) || loc.path) + "(" + loc.branch + ")";
-    return worktreeLink(loc.path, label, mode) + prSuffix(session, loc.branch);
+    return worktreeLink(loc.path, label, mode) + prs(loc.branch);
   }
   // Non-git directory: today's fallback, no branch to show.
   return worktreeLink(loc.path, ICON_TREE + " " + (basename(loc.path) || loc.path), mode);
@@ -201,14 +202,20 @@ function terminalWidth(): number {
   return Number(process.env.COLUMNS) || (process.stdout.columns ?? 0);
 }
 
-function line1(p: Payload, session: string, loc: Location): string {
-  const cfg = loadConfig();
-  const mid = [locationSegment(loc, session, cfg.worktreeClick), contextSegment(p.context_window), p.model?.display_name ?? null]
+// Each field can be switched off in the config (statusline.fields, see src/fields.ts).
+function line1(p: Payload, session: string, loc: Location, cfg: Config): string {
+  const on = cfg.statusline.fields;
+  const mid = [
+    on.location ? locationSegment(loc, session, cfg.worktreeClick, on.prs) : null,
+    on.context ? contextSegment(p.context_window) : null,
+    on.model ? (p.model?.display_name ?? null) : null,
+  ]
     .filter((s): s is string => s !== null && s !== "")
     .join(SEP);
   // Passive mute indicator only (audio control lives in the menu-bar app now).
-  const left = cfg.muted ? ICON_MUTED + " " + mid : mid;
-  const plan = session === "" ? null : getPlan(session);
+  const showMute = cfg.muted && on.muteIcon;
+  const left = showMute ? [ICON_MUTED, mid].filter(Boolean).join(" ") : mid;
+  const plan = !session || !on.plan ? null : getPlan(session);
   if (plan === null) return left;
   const right = openLink(plan, ICON_MAP + " " + sgr(DIM, "plan"));
   const width = terminalWidth();
@@ -221,11 +228,13 @@ function line1(p: Payload, session: string, loc: Location): string {
 // once the session has actually switched — never a repo-wide worktree list.
 // Excluded by branch, not path — a symlinked path (macOS /tmp vs /private/tmp)
 // can make the same worktree look like two different paths.
-function worktreeLine(session: string, loc: Location): string | null {
+function worktreeLine(session: string, loc: Location, cfg: Config): string | null {
   const others = readWorktrees(session).filter((w) => w.branch !== loc.branch);
-  if (others.length === 0) return null;
-  const mode = loadConfig().worktreeClick;
-  return others.map((w) => worktreeLink(w.path, w.branch, mode) + prSuffix(session, w.branch)).join("  ");
+  if (!others.length) return null;
+  const showPrs = cfg.statusline.fields.prs;
+  return others
+    .map((w) => worktreeLink(w.path, w.branch, cfg.worktreeClick) + (showPrs ? prSuffix(session, w.branch) : ""))
+    .join("  ");
 }
 
 // All running sub-agents on one compact line: "🤖 Explore Opus 4.8, review Sonnet 5".
@@ -267,7 +276,9 @@ export function renderStatusline(raw: string): void {
     const iterm = process.env.ITERM_SESSION_ID;
     if (iterm !== undefined && iterm !== "") setItermId(session, iterm);
   }
-  if (hasSession) {
+  const cfg = loadConfig();
+  const on = cfg.statusline.fields;
+  if (hasSession && on.intro) {
     const el = introElapsed(session);
     if (el < ANIM_MS) {
       process.stdout.write(introFrame(el) + "\n");
@@ -275,9 +286,9 @@ export function renderStatusline(raw: string): void {
     }
   }
   const lines = [
-    line1(payload, session, loc),
-    hasSession ? worktreeLine(session, loc) : null,
-    hasSession ? subagentLine(session) : null,
+    line1(payload, session, loc, cfg),
+    hasSession && on.worktrees ? worktreeLine(session, loc, cfg) : null,
+    hasSession && on.subagents ? subagentLine(session) : null,
   ].filter((l): l is string => l !== null && l !== "");
   process.stdout.write(lines.join("\n") + "\n");
 }
