@@ -42,7 +42,7 @@ runtime (or the optional dependency-free build below).
 
 ## Features
 
-- **Multi-line statusline** — a branch-aware location link (current worktree, or `dir(branch)` in a plain repo), a color-graded context-window gauge, model, running sub-agents with their model, and a plan-file link. If you switch worktrees mid-session, the others you've visited list underneath, each with its matched PR shown inline. Only non-empty lines render. A one-shot mini-ship animation greets each new session.
+- **Multi-line statusline** — a branch-aware location link (current worktree, or `dir(branch)` in a plain repo) with a yellow `*` after the branch when the folder has uncommitted changes, a color-graded context-window gauge, model, and (on subscription accounts) your 5-hour and 7-day usage with a [pace](#usage-and-pace) animal (or, on pay-per-use accounts, the [month's spend against a budget](#spend-and-budget-pay-per-use)), running sub-agents with their model, and a plan-file link. If you switch worktrees mid-session, the others you've visited list underneath, each with its matched PR shown inline. Only non-empty lines render. A one-shot mini-ship animation greets each new session. Every field can be switched off: run `/tricorder:setup` in Claude Code to [choose which to show](#choosing-which-statusline-fields-to-show).
 - **Away-team menu bar** — one icon reflects the highest-priority state across every session (🔴 security, 🟡 question, 🟢 done). Click a row to focus that session's iTerm2 tab, wherever it is. A 🔊 marks whichever row's sound just played, so several "mission complete" rows aren't ambiguous about which one is current.
 - **Restore Sessions** — after a crash or reboot, reopen whole project families in fresh iTerm2 windows with one click, grouped automatically by directory.
 - **Attention klaxons** — four Star Trek voice/chime cues, muted by default, toggled per-event from the menu.
@@ -140,6 +140,63 @@ Pick a different clip for any event from the [sound catalog](https://gagoar.gith
 
 `worktreeClick` controls what clicking the worktree link does: `open` (default, a bare `file://` link — no app needed), `copy` (copies the path to the clipboard), or `both`. `copy`/`both` need the menu-bar app running to handle the click; set it from `setup.sh`'s prompt or the app's "Worktree Link" menu.
 
+### Usage and pace
+
+On a subscription account (Pro, Max, ...) Claude Code reports how much of your 5-hour and 7-day limits you have used, and when each window ends. Tricorder shows it as `5h 🐕 37% · 7d 🐢 12%`. The animal tells you whether you are using the limit faster or slower than an even spread over the window:
+
+> pace = % of the limit used − % of the window that has passed (percentage points)
+
+| Animal | Band | Colour | When (default margin 10) |
+|---|---|---|---|
+| 🦥 | Just started | grey | less than 3% of the window has passed: too early to tell |
+| 🐢 | Chill | green | more than 10 points under an even pace |
+| 🐕 | On track | blue | within 10 points either side |
+| 🐎 | Watch out | orange | 10 to 20 points over |
+| 🦅 | Hot | red | more than 20 points over |
+| 🐉 | Over | magenta | the limit is used up (100%) |
+
+Example: 5 hours is the window and 2.5 hours have passed (50%). With 55% used you are +5, 🐕 on track; with 65% used +15, 🐎; with 75% used +25, 🦅. With 30% used you are −20, 🐢.
+
+Below 3% of the window gone the pace is too noisy to mean anything, so a 🦥 sloth shows instead of a pace animal (the percent is grey). If Claude Code sends no reset time, only the percent shows. Both numbers are settings: `statusline.pace.marginPts` (default 10) and `statusline.pace.minElapsedPct` (default 3). Pay-per-use accounts send no limits, so these fields are not offered to them.
+
+### Spend and budget (pay per use)
+
+Accounts that pay per use (an API key or a cloud-provider login) have no 5-hour or 7-day limit, so the usage fields do not apply to them. They get the **spend** field instead: `💰 $62/$200 🐕 31%`, which is what this month has cost, the monthly budget you set, an animal for the pace, and the share of the budget spent.
+
+- **Budget:** `/tricorder:setup` asks for it (only for pay-per-use accounts). Or `tricorder budget 200`, `tricorder budget off`, `tricorder budget` to see it. It is in US dollars, because Claude Code reports cost in USD. It is **not a limit**: it only sets the yardstick. With no budget the field shows just the spend, `💰 $62`.
+- **Pace:** share of the budget spent minus the share of the calendar month (UTC) that has passed, with the same animals as above: 🐢 🐕 🐎 🦅, and 🦥 in the first 3% of the month. **🐉 Over** means more than 100% of the budget is spent (exactly 100% is not over).
+- **Example:** budget $200 on 16 Nov (15 of 30 days, 50% of the month). $100 spent is 50%: +0, 🐕. $130 is 65%: +15, 🐎. $250 is 125%: 🐉.
+- **Where the number comes from:** Claude Code only reports the cost of the session it is running (`cost.total_cost_usd`). Tricorder adds up the new part of each session's cost in its own files, `~/.claude/tricorder/spend/<year-month>/<session>.json`, and sums the month. A session that is resumed starts again from zero and is counted as new spending.
+- **It is an estimate, not your invoice.** It misses sessions that run without a statusline (for example `claude -p`), other machines, other tools using the same key, anything spent before tricorder was installed, and it is Claude Code's own estimate of cost. Check the Console for the real figure.
+- Claude Code also reports a cost on subscription accounts, but that is not money you pay per use, so the spend field is only shown to pay-per-use accounts (or when the account type cannot be told and the payload has no usage limits).
+
+### Remote Control marker
+
+While Remote Control is on for a session, the first line shows `📡 remote`, so you know that session can be reached from another device. Claude Code does not put this in the statusline data. It records it in its own per-session file, `sessions/<pid>.json` in the account's config folder (`$CLAUDE_CONFIG_DIR`, else `~/.claude`), as a `bridgeSessionId` that is text while Remote Control is on and null otherwise. Tricorder finds this session's record by its `sessionId`.
+
+Those files are internal to Claude Code and not a documented interface, and ones from processes that have ended can be left behind. So a record only counts while its process is still running, and if several match, the newest one decides. If the folder or file cannot be read, or looks different, nothing is shown. Switch the `remote` field off if you do not want the marker.
+
+### Account email
+
+On a subscription account the statusline can show the email you are signed in with, in grey at the right edge of the first line (after the plan link): handy when you run a personal and a work account side by side. Claude Code does not send the email to the statusline, so it is read from the account's own file, `$CLAUDE_CONFIG_DIR/.claude.json` (or `~/.claude.json` when that variable is not set). That file is internal to Claude Code and may change; if the email cannot be found, nothing is shown.
+
+It is **on by default** like the other fields. It also appears in screenshots and screen shares, so switch the `account` field off (`/tricorder:setup`, or `tricorder fields set`) if you share your screen. When it is shown, 6 columns are kept empty at the right edge so a terminal or Claude Code's own padding does not clip the end of the address; without it the plan link keeps its old position. Pay-per-use logins have no account entry, so nothing is shown for them.
+
+### Choosing which statusline fields to show
+
+Every statusline field is optional. In Claude Code run `/tricorder:setup`: it detects whether your account is a subscription or pay per use, explains each field that applies (what it shows, an example, what its icons and colours mean), then asks which ones you want. You can also change them from the terminal:
+
+```
+tricorder detect                     # subscription, payg (pay per use) or unknown
+tricorder fields describe            # the fields that apply to your account, as JSON
+tricorder fields set context,model   # show only these two; everything else off
+tricorder fields set all             # show everything again
+```
+
+The choice is stored in `~/.claude/tricorder/config.json` under `statusline.fields`. All fields are on by default, so nothing changes until you choose. Field ids, in the order they appear on the statusline: `muteIcon`, `location`, `dirty`, `prs`, `context`, `model`, `usage5h`, `usage7d`, `spend`, `remote`, `plan`, `account`, `worktrees`, `subagents`, `intro`.
+
+`statusline.mode` is `auto` (default: detect the account type from Claude Code's own `.claude.json`), or `subscription` / `payg` to force it. The detection reads a Claude Code internal file; if that file moves or cannot be read, the type is `unknown` and every field is offered.
+
 ## CLI reference
 
 | Command | Wired to | Does |
@@ -151,6 +208,12 @@ Pick a different clip for any event from the [sound catalog](https://gagoar.gith
 | `sound-set <event> <url> [name]` | catalog page | Fetches a pick and assigns it to an event (trekcore.com only) |
 | `mute [on\|off\|toggle]` | menu | Flips the global mute |
 | `worktree-click <open\|copy\|both>` | setup / menu | Sets what clicking the worktree link does |
+| `detect` | `/tricorder:setup` | Prints the detected account type as JSON |
+| `fields describe [type]` | `/tricorder:setup` | Lists the fields that apply, with explanations and on/off state |
+| `fields questions [type]` | `/tricorder:setup` | Prints the tick-box questions the setup command asks (JSON) |
+| `fields preview` | `/tricorder:setup` | Draws the statusline for a made-up session with your fields, so you can see them |
+| `budget [<dollars>\|off]` | `/tricorder:setup` / you | Shows or sets the monthly budget for the spend field (US dollars) |
+| `fields set <id,id,...\|all>` | `/tricorder:setup` | Sets exactly which fields are on |
 | `warp` | menu / URL | Flies the Enterprise |
 | `status` | menu (polled) | JSON snapshot for the menu-bar app |
 | `ack <id>` | menu | Clears a session's attention state |
