@@ -119,7 +119,9 @@ fi
 # ---- summary ------------------------------------------------------------------
 echo "${BOLD}Done${RESET}"
 if [ "$WANT_STATUSLINE" = "yes" ]; then
-  if [ "$STATUSLINE_OK" = 1 ]; then ok "Statusline: restart Claude Code sessions to see it"
+  if [ "$STATUSLINE_OK" = 1 ]; then
+    ok "Statusline: restart Claude Code sessions to see it"
+    info "Every field is on. To choose which to show, run /tricorder:setup in Claude Code."
   else warn "Statusline: not fully configured (see above)"; fi
 fi
 if [ "$WANT_BAR" = "yes" ]; then
