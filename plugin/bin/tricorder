@@ -13,21 +13,244 @@ function readStdin() {
 }
 
 // src/statusline.ts
-var import_node_path3 = require("node:path");
+var import_node_path4 = require("node:path");
 
 // src/config.ts
 var import_node_os = require("node:os");
-var import_node_path = require("node:path");
+var import_node_path2 = require("node:path");
+var import_node_fs3 = require("node:fs");
+
+// src/account.ts
 var import_node_fs2 = require("node:fs");
+var import_node_path = require("node:path");
+
+// src/pace.ts
+var PACE_STYLES = {
+  early: { name: "Just started", color: 90, icon: "\u{1F9A5}" },
+  // grey: too early in the window to tell
+  chill: { name: "Chill", color: 32, icon: "\u{1F422}" },
+  // green
+  onTrack: { name: "On track", color: 94, icon: "\u{1F415}" },
+  // blue
+  watchOut: { name: "Watch out", color: "38;5;214", icon: "\u{1F40E}" },
+  // orange
+  hot: { name: "Hot", color: 91, icon: "\u{1F985}" },
+  // red; the eagle is the closest emoji to a hawk
+  over: { name: "Over", color: 95, icon: "\u{1F409}" }
+  // magenta
+};
+var DEFAULT_PACE = { marginPts: 10, minElapsedPct: 3 };
+var FIVE_HOUR_WINDOW_S = 18e3;
+var SEVEN_DAY_WINDOW_S = 604800;
+var PCT_MAX = 100;
+var MS_PER_S = 1e3;
+var WATCH_OUT_MARGINS = 2;
+function elapsedPct(resetsAtS2, nowS, windowS) {
+  return (1 - (resetsAtS2 - nowS) / windowS) * PCT_MAX;
+}
+function resetsAtS(elapsedPctGone, nowS, windowS) {
+  return nowS + (1 - elapsedPctGone / PCT_MAX) * windowS;
+}
+function bandForDeviation(deviationPts, marginPts) {
+  if (deviationPts < -marginPts) return "chill";
+  if (deviationPts <= marginPts) return "onTrack";
+  if (deviationPts <= WATCH_OUT_MARGINS * marginPts) return "watchOut";
+  return "hot";
+}
+function limitBand(usedPct, elapsed, cfg) {
+  if (usedPct >= PCT_MAX) return "over";
+  if (elapsed === null || elapsed > PCT_MAX) return null;
+  if (elapsed < cfg.minElapsedPct) return "early";
+  return bandForDeviation(usedPct - elapsed, cfg.marginPts);
+}
+
+// src/fields.ts
+var SUBSCRIPTION = "subscription";
+var PAYG = "payg";
+var UNKNOWN = "unknown";
+var AUTO = "auto";
+var ACCOUNT_TYPES = [SUBSCRIPTION, PAYG];
+var DETECTED_TYPES = [...ACCOUNT_TYPES, UNKNOWN];
+var ACCOUNT_MODES = [AUTO, ...ACCOUNT_TYPES];
+function isAccountMode(value) {
+  return ACCOUNT_MODES.includes(value);
+}
+function isDetectedType(value) {
+  return DETECTED_TYPES.includes(value);
+}
+var EVERY_ACCOUNT = ACCOUNT_TYPES;
+var SUBSCRIPTION_ONLY = [SUBSCRIPTION];
+var EARLY_PCT = DEFAULT_PACE.minElapsedPct;
+var PACE_LEGEND = `The animal and the colour compare your use with the time gone in the window: \u{1F422} green = well under an even pace, \u{1F415} blue = on pace, \u{1F40E} orange = a little fast, \u{1F985} red = too fast, \u{1F409} magenta = limit reached. In the first ${EARLY_PCT}% of a window it is too early to tell, so a \u{1F9A5} sloth (grey) shows instead. (Margin and ${EARLY_PCT}% are settings: statusline.pace.)`;
+var FIELDS = [
+  {
+    id: "muteIcon",
+    name: "Mute icon",
+    shows: "A speaker icon at the start of the line while sounds are muted.",
+    sample: "\u{1F507}",
+    legend: "\u{1F507} = sounds are muted.",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "location",
+    name: "Location",
+    shows: "The folder and branch you are working in, as a clickable link. In a worktree session it shows the branch with a tree icon.",
+    sample: "my-repo(main)   or   \u{1F333} fix-login",
+    legend: "Clicking opens the folder, copies the path, or both (see worktreeClick in the config).",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "dirty",
+    name: "Uncommitted changes",
+    shows: "A yellow * after the branch name when the folder has changes that are not committed yet (edited, staged or new files).",
+    sample: "my-repo(main*)   or   \u{1F333} fix-login*",
+    legend: "Yellow *. Nothing is shown for a folder that is not a git repository.",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "prs",
+    name: "Pull requests",
+    shows: "A clickable tag for each pull request this session opened from the current branch.",
+    sample: "(#12)",
+    legend: "Cyan.",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "context",
+    name: "Context window",
+    shows: "How full the model's context window is.",
+    sample: "\u{1F50B} 42%",
+    legend: "\u{1F50B} = context window. Green below 70%, yellow 70-89%, red from 90%.",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "model",
+    name: "Model",
+    shows: "The name of the model this session is using.",
+    sample: "Opus 5.5",
+    legend: "",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "usage5h",
+    name: "5-hour usage",
+    shows: "How much of your 5-hour usage limit you have used, and whether you are using it faster or slower than an even pace.",
+    sample: "5h \u{1F415} 37%",
+    legend: PACE_LEGEND,
+    appliesTo: SUBSCRIPTION_ONLY,
+    defaultOn: true
+  },
+  {
+    id: "usage7d",
+    name: "7-day usage",
+    shows: "How much of your 7-day usage limit you have used, and whether you are using it faster or slower than an even pace.",
+    sample: "7d \u{1F422} 12%",
+    legend: PACE_LEGEND,
+    appliesTo: SUBSCRIPTION_ONLY,
+    defaultOn: true
+  },
+  {
+    id: "plan",
+    name: "Plan link",
+    shows: "A link to the current plan file, at the right edge, once the session has one.",
+    sample: "\u{1F5FA}\uFE0F plan",
+    legend: "\u{1F5FA}\uFE0F = plan file. Grey text.",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "worktrees",
+    name: "Other worktrees",
+    shows: "A second line listing the other worktrees this session has visited, each with its pull requests.",
+    sample: "fix-login (#12)  add-tests",
+    legend: "",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "subagents",
+    name: "Sub-agents",
+    shows: "A line listing the sub-agents running right now, with the model each one uses.",
+    sample: "\u{1F916} Explore Opus 4.8, review Sonnet 5",
+    legend: "\u{1F916} = sub-agents. Model names in grey.",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "intro",
+    name: "Start-up animation",
+    shows: "A small ship that crosses the line for the first 4 seconds of a session.",
+    sample: "o\u2261\u2261\u2261>",
+    legend: "Cyan.",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  }
+];
+var FIELD_IDS = FIELDS.map((f) => f.id);
+function isFieldId(value) {
+  return FIELD_IDS.includes(value);
+}
+function buildFields(valueFor) {
+  return Object.fromEntries(FIELD_IDS.map((id) => [id, valueFor(id)]));
+}
+function defaultFields() {
+  return buildFields((id) => FIELDS.some((f) => f.id === id && f.defaultOn));
+}
+function fieldsFor(type) {
+  return FIELDS.filter((f) => type === UNKNOWN || f.appliesTo.includes(type));
+}
+
+// src/account.ts
+var UNKNOWN_ACCOUNT = { type: UNKNOWN, plan: null, extraUsage: false };
+function readField(value, key) {
+  return typeof value === "object" && value !== null && key in value ? value[key] : void 0;
+}
+function classify(parsed) {
+  if (typeof parsed !== "object" || parsed === null) return UNKNOWN_ACCOUNT;
+  const oauth = readField(parsed, "oauthAccount");
+  if (typeof oauth !== "object" || oauth === null) return { type: PAYG, plan: null, extraUsage: false };
+  const plan = readField(oauth, "organizationType");
+  return {
+    type: SUBSCRIPTION,
+    plan: typeof plan === "string" ? plan : null,
+    extraUsage: readField(oauth, "hasExtraUsageEnabled") === true
+  };
+}
+function accountFilePath() {
+  const dir = process.env.CLAUDE_CONFIG_DIR;
+  if (dir) return (0, import_node_path.join)(dir, ".claude.json");
+  const home = process.env.HOME;
+  return home ? (0, import_node_path.join)(home, ".claude.json") : null;
+}
+function detectAccount() {
+  const file = accountFilePath();
+  if (file === null) return UNKNOWN_ACCOUNT;
+  try {
+    return classify(JSON.parse((0, import_node_fs2.readFileSync)(file, "utf8")));
+  } catch {
+    return UNKNOWN_ACCOUNT;
+  }
+}
+function resolveType(mode, detected) {
+  return mode === AUTO ? detected : mode;
+}
+
+// src/config.ts
 var JSON_INDENT = 2;
-var DATA_DIR = (0, import_node_path.join)((0, import_node_os.homedir)(), ".claude", "tricorder");
-var CONFIG_PATH = (0, import_node_path.join)(DATA_DIR, "config.json");
-var STATE_DIR = (0, import_node_path.join)(DATA_DIR, "state");
-var SOUNDS_DIR = (0, import_node_path.join)(DATA_DIR, "sounds");
-var QUESTION_SOUND = (0, import_node_path.join)(SOUNDS_DIR, "please-specify.mp3");
-var PERMISSION_SOUND = (0, import_node_path.join)(SOUNDS_DIR, "security-authorisation.mp3");
-var STOP_SOUND = (0, import_node_path.join)(SOUNDS_DIR, "transporter-complete.mp3");
-var PLAN_SOUND = (0, import_node_path.join)(SOUNDS_DIR, "engage.mp3");
+var DATA_DIR = (0, import_node_path2.join)((0, import_node_os.homedir)(), ".claude", "tricorder");
+var CONFIG_PATH = (0, import_node_path2.join)(DATA_DIR, "config.json");
+var STATE_DIR = (0, import_node_path2.join)(DATA_DIR, "state");
+var SOUNDS_DIR = (0, import_node_path2.join)(DATA_DIR, "sounds");
+var QUESTION_SOUND = (0, import_node_path2.join)(SOUNDS_DIR, "please-specify.mp3");
+var PERMISSION_SOUND = (0, import_node_path2.join)(SOUNDS_DIR, "security-authorisation.mp3");
+var STOP_SOUND = (0, import_node_path2.join)(SOUNDS_DIR, "transporter-complete.mp3");
+var PLAN_SOUND = (0, import_node_path2.join)(SOUNDS_DIR, "engage.mp3");
 var WORKTREE_CLICK_MODES = ["open", "copy", "both"];
 function isWorktreeClickMode(value) {
   return WORKTREE_CLICK_MODES.includes(value);
@@ -36,6 +259,8 @@ var DEFAULT_CONFIG = {
   // Sounds off by default; turn them on from the menu-bar app.
   muted: true,
   worktreeClick: "open",
+  // Every field on, so nothing changes for an existing user until they choose.
+  statusline: { fields: defaultFields(), mode: AUTO, pace: DEFAULT_PACE },
   sounds: {
     // "Please specify how you would like to proceed" — plays when Claude waits
     // on you (Notification / AskUserQuestion).
@@ -52,23 +277,41 @@ var DEFAULT_CONFIG = {
   }
 };
 function ensureDir(dir) {
-  (0, import_node_fs2.mkdirSync)(dir, { recursive: true });
+  (0, import_node_fs3.mkdirSync)(dir, { recursive: true });
 }
 function serialize(value) {
   return JSON.stringify(value, null, JSON_INDENT) + "\n";
 }
 function loadConfig() {
   ensureDir(DATA_DIR);
-  if (!(0, import_node_fs2.existsSync)(CONFIG_PATH)) {
-    (0, import_node_fs2.writeFileSync)(CONFIG_PATH, serialize(DEFAULT_CONFIG));
+  if (!(0, import_node_fs3.existsSync)(CONFIG_PATH)) {
+    (0, import_node_fs3.writeFileSync)(CONFIG_PATH, serialize(DEFAULT_CONFIG));
     return structuredClone(DEFAULT_CONFIG);
   }
   try {
-    const raw = JSON.parse((0, import_node_fs2.readFileSync)(CONFIG_PATH, "utf8"));
+    const raw = JSON.parse((0, import_node_fs3.readFileSync)(CONFIG_PATH, "utf8"));
     return mergeConfig(DEFAULT_CONFIG, raw);
   } catch {
     return structuredClone(DEFAULT_CONFIG);
   }
+}
+var isPositive = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
+var isShareBelowMax = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 && v < PCT_MAX;
+function mergePace(base, given) {
+  const marginPts = readField(given, "marginPts");
+  const minElapsedPct = readField(given, "minElapsedPct");
+  return {
+    marginPts: isPositive(marginPts) ? marginPts : base.marginPts,
+    minElapsedPct: isShareBelowMax(minElapsedPct) ? minElapsedPct : base.minElapsedPct
+  };
+}
+function mergeStatusline(base, override) {
+  const given = override?.fields;
+  const fields2 = buildFields((id) => {
+    const value = given?.[id];
+    return typeof value === "boolean" ? value : base.fields[id];
+  });
+  return { fields: fields2, mode: isAccountMode(override?.mode) ? override.mode : base.mode, pace: mergePace(base.pace, override?.pace) };
 }
 function mergeConfig(base, override) {
   const events = Object.keys(base.sounds);
@@ -81,17 +324,18 @@ function mergeConfig(base, override) {
   return {
     muted: typeof override.muted === "boolean" ? override.muted : base.muted,
     worktreeClick: isWorktreeClickMode(override.worktreeClick) ? override.worktreeClick : base.worktreeClick,
+    statusline: mergeStatusline(base.statusline, override.statusline),
     sounds
   };
 }
 function saveConfig(cfg) {
   ensureDir(DATA_DIR);
-  (0, import_node_fs2.writeFileSync)(CONFIG_PATH, serialize(cfg));
+  (0, import_node_fs3.writeFileSync)(CONFIG_PATH, serialize(cfg));
 }
 
 // src/state.ts
-var import_node_path2 = require("node:path");
-var import_node_fs3 = require("node:fs");
+var import_node_path3 = require("node:path");
+var import_node_fs4 = require("node:fs");
 var JSON_EXT = ".json";
 var PRS_FILE = "prs.json";
 var WORKTREES_FILE = "worktrees.json";
@@ -103,20 +347,20 @@ function sanitize(value) {
   return value.replace(/[^A-Za-z0-9._-]/g, "_");
 }
 function sessionDir(sessionId) {
-  return (0, import_node_path2.join)(STATE_DIR, sanitize(sessionId));
+  return (0, import_node_path3.join)(STATE_DIR, sanitize(sessionId));
 }
 function subagentsDir(sessionId) {
-  return (0, import_node_path2.join)(sessionDir(sessionId), SUBAGENTS_DIR);
+  return (0, import_node_path3.join)(sessionDir(sessionId), SUBAGENTS_DIR);
 }
 function readJSON(path, fallback) {
   try {
-    return JSON.parse((0, import_node_fs3.readFileSync)(path, "utf8"));
+    return JSON.parse((0, import_node_fs4.readFileSync)(path, "utf8"));
   } catch {
     return fallback;
   }
 }
 function readPRs(sessionId) {
-  return readJSON((0, import_node_path2.join)(sessionDir(sessionId), PRS_FILE), []);
+  return readJSON((0, import_node_path3.join)(sessionDir(sessionId), PRS_FILE), []);
 }
 function addPR(sessionId, pr) {
   const dir = sessionDir(sessionId);
@@ -126,44 +370,44 @@ function addPR(sessionId, pr) {
     (p) => p.url === pr.url || pr.number !== null && p.number === pr.number
   );
   if (already) return;
-  (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, PRS_FILE), serialize([...prs, pr]));
+  (0, import_node_fs4.writeFileSync)((0, import_node_path3.join)(dir, PRS_FILE), serialize([...prs, pr]));
 }
 function prsForBranch(sessionId, branch) {
   return readPRs(sessionId).filter((p) => p.branch === branch);
 }
 function readWorktrees(sessionId) {
-  return readJSON((0, import_node_path2.join)(sessionDir(sessionId), WORKTREES_FILE), []);
+  return readJSON((0, import_node_path3.join)(sessionDir(sessionId), WORKTREES_FILE), []);
 }
 function addWorktree(sessionId, ref) {
   const dir = sessionDir(sessionId);
   ensureDir(dir);
   const rest = readWorktrees(sessionId).filter((w) => w.branch !== ref.branch);
-  (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, WORKTREES_FILE), serialize([...rest, ref].slice(-MAX_WORKTREES)));
+  (0, import_node_fs4.writeFileSync)((0, import_node_path3.join)(dir, WORKTREES_FILE), serialize([...rest, ref].slice(-MAX_WORKTREES)));
 }
 function addSubagent(sessionId, id, data) {
   const dir = subagentsDir(sessionId);
   ensureDir(dir);
-  (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, sanitize(id) + JSON_EXT), serialize(data));
+  (0, import_node_fs4.writeFileSync)((0, import_node_path3.join)(dir, sanitize(id) + JSON_EXT), serialize(data));
 }
 function removeSubagent(sessionId, id) {
   try {
-    (0, import_node_fs3.rmSync)((0, import_node_path2.join)(subagentsDir(sessionId), sanitize(id) + JSON_EXT), { force: true });
+    (0, import_node_fs4.rmSync)((0, import_node_path3.join)(subagentsDir(sessionId), sanitize(id) + JSON_EXT), { force: true });
   } catch {
   }
 }
 function listSubagents(sessionId) {
   const dir = subagentsDir(sessionId);
-  if (!(0, import_node_fs3.existsSync)(dir)) return [];
-  return (0, import_node_fs3.readdirSync)(dir).filter((f) => f.endsWith(JSON_EXT)).map((f) => readJSON((0, import_node_path2.join)(dir, f), null)).filter((s) => s !== null).sort((a, b) => a.startedAt - b.startedAt);
+  if (!(0, import_node_fs4.existsSync)(dir)) return [];
+  return (0, import_node_fs4.readdirSync)(dir).filter((f) => f.endsWith(JSON_EXT)).map((f) => readJSON((0, import_node_path3.join)(dir, f), null)).filter((s) => s !== null).sort((a, b) => a.startedAt - b.startedAt);
 }
 function setPlan(sessionId, planPath) {
   const dir = sessionDir(sessionId);
   ensureDir(dir);
-  (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, PLAN_FILE), planPath + "\n");
+  (0, import_node_fs4.writeFileSync)((0, import_node_path3.join)(dir, PLAN_FILE), planPath + "\n");
 }
 function getPlan(sessionId) {
   try {
-    return (0, import_node_fs3.readFileSync)((0, import_node_path2.join)(sessionDir(sessionId), PLAN_FILE), "utf8").trim() || null;
+    return (0, import_node_fs4.readFileSync)((0, import_node_path3.join)(sessionDir(sessionId), PLAN_FILE), "utf8").trim() || null;
   } catch {
     return null;
   }
@@ -171,11 +415,11 @@ function getPlan(sessionId) {
 function setModel(sessionId, model) {
   const dir = sessionDir(sessionId);
   ensureDir(dir);
-  (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, MODEL_FILE), model + "\n");
+  (0, import_node_fs4.writeFileSync)((0, import_node_path3.join)(dir, MODEL_FILE), model + "\n");
 }
 function getModel(sessionId) {
   try {
-    return (0, import_node_fs3.readFileSync)((0, import_node_path2.join)(sessionDir(sessionId), MODEL_FILE), "utf8").trim() || null;
+    return (0, import_node_fs4.readFileSync)((0, import_node_path3.join)(sessionDir(sessionId), MODEL_FILE), "utf8").trim() || null;
   } catch {
     return null;
   }
@@ -184,11 +428,11 @@ var SOUND_AT_FILE = "sound-at.txt";
 function setLastSound(sessionId) {
   const dir = sessionDir(sessionId);
   ensureDir(dir);
-  (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, SOUND_AT_FILE), String(Date.now()));
+  (0, import_node_fs4.writeFileSync)((0, import_node_path3.join)(dir, SOUND_AT_FILE), String(Date.now()));
 }
 function getLastSound(sessionId) {
   try {
-    const raw = Number((0, import_node_fs3.readFileSync)((0, import_node_path2.join)(sessionDir(sessionId), SOUND_AT_FILE), "utf8").trim());
+    const raw = Number((0, import_node_fs4.readFileSync)((0, import_node_path3.join)(sessionDir(sessionId), SOUND_AT_FILE), "utf8").trim());
     return Number.isFinite(raw) ? raw : null;
   } catch {
     return null;
@@ -202,11 +446,11 @@ var DEBUG_DIR = "_debug";
 function writeText(sessionId, file, value) {
   const dir = sessionDir(sessionId);
   ensureDir(dir);
-  (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, file), value + "\n");
+  (0, import_node_fs4.writeFileSync)((0, import_node_path3.join)(dir, file), value + "\n");
 }
 function readText(sessionId, file) {
   try {
-    return (0, import_node_fs3.readFileSync)((0, import_node_path2.join)(sessionDir(sessionId), file), "utf8").trim() || null;
+    return (0, import_node_fs4.readFileSync)((0, import_node_path3.join)(sessionDir(sessionId), file), "utf8").trim() || null;
   } catch {
     return null;
   }
@@ -214,10 +458,10 @@ function readText(sessionId, file) {
 function setAttention(sessionId, state) {
   const dir = sessionDir(sessionId);
   ensureDir(dir);
-  (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, ATTENTION_FILE), serialize({ state, at: Date.now() }));
+  (0, import_node_fs4.writeFileSync)((0, import_node_path3.join)(dir, ATTENTION_FILE), serialize({ state, at: Date.now() }));
 }
 function getAttention(sessionId) {
-  return readJSON((0, import_node_path2.join)(sessionDir(sessionId), ATTENTION_FILE), null);
+  return readJSON((0, import_node_path3.join)(sessionDir(sessionId), ATTENTION_FILE), null);
 }
 function setLabel(sessionId, label) {
   writeText(sessionId, LABEL_FILE, label);
@@ -226,7 +470,7 @@ function getLabel(sessionId) {
   return readText(sessionId, LABEL_FILE);
 }
 function setLabelIfAbsent(sessionId, label) {
-  if ((0, import_node_fs3.existsSync)((0, import_node_path2.join)(sessionDir(sessionId), LABEL_FILE))) return;
+  if ((0, import_node_fs4.existsSync)((0, import_node_path3.join)(sessionDir(sessionId), LABEL_FILE))) return;
   writeText(sessionId, LABEL_FILE, label);
 }
 function setItermId(sessionId, id) {
@@ -240,38 +484,38 @@ function setCwd(sessionId, cwd) {
 }
 function removeSession(sessionId) {
   try {
-    (0, import_node_fs3.rmSync)(sessionDir(sessionId), { recursive: true, force: true });
+    (0, import_node_fs4.rmSync)(sessionDir(sessionId), { recursive: true, force: true });
   } catch {
   }
 }
 function listSessions() {
   try {
-    return (0, import_node_fs3.readdirSync)(STATE_DIR, { withFileTypes: true }).filter((e) => e.isDirectory() && e.name !== DEBUG_DIR).map((e) => e.name);
+    return (0, import_node_fs4.readdirSync)(STATE_DIR, { withFileTypes: true }).filter((e) => e.isDirectory() && e.name !== DEBUG_DIR).map((e) => e.name);
   } catch {
     return [];
   }
 }
 var INTRO_FILE = "intro.txt";
 function introElapsed(sessionId) {
-  const path = (0, import_node_path2.join)(sessionDir(sessionId), INTRO_FILE);
+  const path = (0, import_node_path3.join)(sessionDir(sessionId), INTRO_FILE);
   try {
-    const started = Number((0, import_node_fs3.readFileSync)(path, "utf8").trim());
+    const started = Number((0, import_node_fs4.readFileSync)(path, "utf8").trim());
     if (Number.isFinite(started)) return Date.now() - started;
   } catch {
   }
   const dir = sessionDir(sessionId);
   ensureDir(dir);
   try {
-    (0, import_node_fs3.writeFileSync)(path, String(Date.now()));
+    (0, import_node_fs4.writeFileSync)(path, String(Date.now()));
   } catch {
   }
   return 0;
 }
 function debugDump(name, raw) {
   try {
-    const dir = (0, import_node_path2.join)(STATE_DIR, "_debug");
+    const dir = (0, import_node_path3.join)(STATE_DIR, "_debug");
     ensureDir(dir);
-    (0, import_node_fs3.writeFileSync)((0, import_node_path2.join)(dir, name + JSON_EXT), raw);
+    (0, import_node_fs4.writeFileSync)((0, import_node_path3.join)(dir, name + JSON_EXT), raw);
   } catch {
   }
 }
@@ -318,6 +562,10 @@ function currentBranch(cwd) {
   if (out === null) return null;
   const branch = out.trim();
   return branch === "" ? null : branch;
+}
+function isDirty(cwd) {
+  const out = run(["status", "--porcelain"], cwd);
+  return out === null ? null : Boolean(out.trim());
 }
 var EMPTY_STATE = { entries: [], path: null, branch: null, bare: false };
 function flush(state) {
@@ -374,8 +622,11 @@ function charWidth(ch) {
   if (cp === VS16) return 0;
   return cp >= WIDE_MIN ? WIDE_WIDTH : NARROW_WIDTH;
 }
+function plainText(s) {
+  return s.replace(OSC8_RE, "").replace(SGR_RE, "");
+}
 function visWidth(s) {
-  const clean = s.replace(OSC8_RE, "").replace(SGR_RE, "");
+  const clean = plainText(s);
   return [...clean].reduce((w, ch) => w + charWidth(ch), 0);
 }
 var ICON_MUTED = "\u{1F507}";
@@ -388,7 +639,7 @@ var MARGIN = 1;
 var MINI_SHIP = "o\u2261\u2261\u2261>";
 var ANIM_MS = 4e3;
 var DEFAULT_WIDTH = 80;
-var PCT_MAX = 100;
+var PCT_MAX2 = 100;
 var CTX_RED_PCT = 90;
 var CTX_YELLOW_PCT = 70;
 function usedTokens(cw) {
@@ -400,7 +651,7 @@ function usedTokens(cw) {
 }
 function computePct(cw, size, used) {
   if (typeof cw.used_percentage === "number") return cw.used_percentage;
-  if (size > 0) return used / size * PCT_MAX;
+  if (size > 0) return used / size * PCT_MAX2;
   return 0;
 }
 function ctxColor(pct) {
@@ -414,13 +665,23 @@ function contextSegment(cw) {
   const pctInt = Math.round(computePct(cw, size, usedTokens(cw)));
   return ICON_CTX + " " + sgr(ctxColor(pctInt), pctInt + "%");
 }
+function usageSegment(label, win, windowS, nowS, pace) {
+  const used = win?.used_percentage;
+  if (typeof used !== "number") return null;
+  const pct = Math.round(used) + "%";
+  const resets = win?.resets_at;
+  const band = limitBand(used, typeof resets === "number" ? elapsedPct(resets, nowS, windowS) : null, pace);
+  if (band === null) return label + " " + pct;
+  const style = PACE_STYLES[band];
+  return label + " " + style.icon + " " + sgr(style.color, pct);
+}
 function resolveLocation(p, session) {
   const wt = p.worktree;
   const path = wt?.path ?? p.workspace?.current_dir ?? p.cwd ?? "";
   if (path === "") return { path, branch: null, isWorktree: false };
   const gitWorktree = p.workspace?.git_worktree;
   if (wt !== void 0 || gitWorktree !== void 0) {
-    const branch = wt?.branch ?? wt?.name ?? gitWorktree ?? ((0, import_node_path3.basename)(path) || path);
+    const branch = wt?.branch ?? wt?.name ?? gitWorktree ?? ((0, import_node_path4.basename)(path) || path);
     if (session !== "") addWorktree(session, { path, branch });
     return { path, branch, isWorktree: true };
   }
@@ -430,37 +691,49 @@ function prSuffix(session, branch) {
   if (session === "" || branch === null) return "";
   return prsForBranch(session, branch).map((pr) => " " + osc8(pr.url, sgr(CYAN, "(" + (pr.number === null ? "PR" : "#" + pr.number) + ")"))).join("");
 }
-function locationSegment(loc, session, mode) {
+function locationSegment(loc, session, opts) {
   if (loc.path === "") return null;
+  const { mode, showPrs } = opts;
+  const mark = opts.dirty ? sgr(YELLOW, "*") : "";
+  const prs = (branch) => showPrs ? prSuffix(session, branch) : "";
   if (loc.isWorktree) {
-    const label = loc.branch ?? ((0, import_node_path3.basename)(loc.path) || loc.path);
-    return worktreeLink(loc.path, ICON_TREE + " " + label, mode) + prSuffix(session, loc.branch);
+    const label = loc.branch ?? ((0, import_node_path4.basename)(loc.path) || loc.path);
+    return worktreeLink(loc.path, ICON_TREE + " " + label + mark, mode) + prs(loc.branch);
   }
   if (loc.branch !== null) {
-    const label = ((0, import_node_path3.basename)(loc.path) || loc.path) + "(" + loc.branch + ")";
-    return worktreeLink(loc.path, label, mode) + prSuffix(session, loc.branch);
+    const label = ((0, import_node_path4.basename)(loc.path) || loc.path) + "(" + loc.branch + mark + ")";
+    return worktreeLink(loc.path, label, mode) + prs(loc.branch);
   }
-  return worktreeLink(loc.path, ICON_TREE + " " + ((0, import_node_path3.basename)(loc.path) || loc.path), mode);
+  return worktreeLink(loc.path, ICON_TREE + " " + ((0, import_node_path4.basename)(loc.path) || loc.path), mode);
 }
 function terminalWidth() {
   return Number(process.env.COLUMNS) || (process.stdout.columns ?? 0);
 }
-function line1(p, session, loc) {
-  const cfg = loadConfig();
-  const mid = [locationSegment(loc, session, cfg.worktreeClick), contextSegment(p.context_window), p.model?.display_name ?? null].filter((s) => s !== null && s !== "").join(SEP);
-  const left = cfg.muted ? ICON_MUTED + " " + mid : mid;
-  const plan = session === "" ? null : getPlan(session);
+function line1(p, session, loc, cfg) {
+  const on = cfg.statusline.fields;
+  const dirty = on.location && on.dirty && Boolean(loc.path) && isDirty(loc.path) === true;
+  const nowS = Date.now() / MS_PER_S;
+  const mid = [
+    on.location ? locationSegment(loc, session, { mode: cfg.worktreeClick, showPrs: on.prs, dirty }) : null,
+    on.context ? contextSegment(p.context_window) : null,
+    on.model ? p.model?.display_name ?? null : null,
+    on.usage5h ? usageSegment("5h", p.rate_limits?.five_hour, FIVE_HOUR_WINDOW_S, nowS, cfg.statusline.pace) : null,
+    on.usage7d ? usageSegment("7d", p.rate_limits?.seven_day, SEVEN_DAY_WINDOW_S, nowS, cfg.statusline.pace) : null
+  ].filter((s) => s !== null && s !== "").join(SEP);
+  const showMute = cfg.muted && on.muteIcon;
+  const left = showMute ? [ICON_MUTED, mid].filter(Boolean).join(" ") : mid;
+  const plan = !session || !on.plan ? null : getPlan(session);
   if (plan === null) return left;
   const right = openLink(plan, ICON_MAP + " " + sgr(DIM, "plan"));
   const width = terminalWidth();
   const gap = width > 0 ? Math.max(MARGIN, width - visWidth(left) - visWidth(right) - MARGIN) : MARGIN;
   return left + " ".repeat(gap) + right;
 }
-function worktreeLine(session, loc) {
+function worktreeLine(session, loc, cfg) {
   const others = readWorktrees(session).filter((w) => w.branch !== loc.branch);
-  if (others.length === 0) return null;
-  const mode = loadConfig().worktreeClick;
-  return others.map((w) => worktreeLink(w.path, w.branch, mode) + prSuffix(session, w.branch)).join("  ");
+  if (!others.length) return null;
+  const showPrs = cfg.statusline.fields.prs;
+  return others.map((w) => worktreeLink(w.path, w.branch, cfg.worktreeClick) + (showPrs ? prSuffix(session, w.branch) : "")).join("  ");
 }
 function subagentLine(session) {
   const subs = listSubagents(session);
@@ -491,11 +764,13 @@ function renderStatusline(raw) {
   if (hasSession && model !== void 0 && model !== "") setModel(session, model);
   const loc = resolveLocation(payload, session);
   if (hasSession) {
-    setLabel(session, loc.branch ?? ((0, import_node_path3.basename)(loc.path) || session));
+    setLabel(session, loc.branch ?? ((0, import_node_path4.basename)(loc.path) || session));
     const iterm = process.env.ITERM_SESSION_ID;
     if (iterm !== void 0 && iterm !== "") setItermId(session, iterm);
   }
-  if (hasSession) {
+  const cfg = loadConfig();
+  const on = cfg.statusline.fields;
+  if (hasSession && on.intro) {
     const el = introElapsed(session);
     if (el < ANIM_MS) {
       process.stdout.write(introFrame(el) + "\n");
@@ -503,16 +778,16 @@ function renderStatusline(raw) {
     }
   }
   const lines = [
-    line1(payload, session, loc),
-    hasSession ? worktreeLine(session, loc) : null,
-    hasSession ? subagentLine(session) : null
+    line1(payload, session, loc, cfg),
+    hasSession && on.worktrees ? worktreeLine(session, loc, cfg) : null,
+    hasSession && on.subagents ? subagentLine(session) : null
   ].filter((l) => l !== null && l !== "");
   process.stdout.write(lines.join("\n") + "\n");
 }
 
 // src/capture.ts
 var import_node_buffer = require("node:buffer");
-var import_node_path5 = require("node:path");
+var import_node_path6 = require("node:path");
 
 // src/iterm.ts
 var import_node_child_process2 = require("node:child_process");
@@ -545,9 +820,9 @@ function publish(vars) {
 }
 
 // src/log.ts
-var import_node_fs4 = require("node:fs");
-var import_node_path4 = require("node:path");
-var LOG_PATH = (0, import_node_path4.join)(DATA_DIR, "tricorder.log");
+var import_node_fs5 = require("node:fs");
+var import_node_path5 = require("node:path");
+var LOG_PATH = (0, import_node_path5.join)(DATA_DIR, "tricorder.log");
 var TAIL_DEFAULT = 40;
 var MAX_LOG_BYTES = 524288;
 var KEEP_LINES = 2e3;
@@ -557,18 +832,18 @@ function stamp() {
 function log(line) {
   try {
     ensureDir(DATA_DIR);
-    if ((0, import_node_fs4.existsSync)(LOG_PATH) && (0, import_node_fs4.statSync)(LOG_PATH).size > MAX_LOG_BYTES) {
-      const kept = (0, import_node_fs4.readFileSync)(LOG_PATH, "utf8").split("\n").slice(-KEEP_LINES).join("\n");
-      (0, import_node_fs4.writeFileSync)(LOG_PATH, kept);
+    if ((0, import_node_fs5.existsSync)(LOG_PATH) && (0, import_node_fs5.statSync)(LOG_PATH).size > MAX_LOG_BYTES) {
+      const kept = (0, import_node_fs5.readFileSync)(LOG_PATH, "utf8").split("\n").slice(-KEEP_LINES).join("\n");
+      (0, import_node_fs5.writeFileSync)(LOG_PATH, kept);
     }
-    (0, import_node_fs4.appendFileSync)(LOG_PATH, stamp() + " " + line + "\n");
+    (0, import_node_fs5.appendFileSync)(LOG_PATH, stamp() + " " + line + "\n");
   } catch {
   }
 }
 function showLogs(arg) {
   if (arg === "clear") {
     try {
-      (0, import_node_fs4.writeFileSync)(LOG_PATH, "");
+      (0, import_node_fs5.writeFileSync)(LOG_PATH, "");
     } catch {
     }
     process.stdout.write("cleared " + LOG_PATH + "\n");
@@ -576,7 +851,7 @@ function showLogs(arg) {
   }
   const n = Number(arg) || TAIL_DEFAULT;
   try {
-    const lines = (0, import_node_fs4.readFileSync)(LOG_PATH, "utf8").split("\n").filter((l) => l !== "");
+    const lines = (0, import_node_fs5.readFileSync)(LOG_PATH, "utf8").split("\n").filter((l) => l !== "");
     process.stdout.write(lines.slice(-n).join("\n") + "\n");
   } catch {
     process.stdout.write("(no log yet at " + LOG_PATH + ")\n");
@@ -663,9 +938,9 @@ function handlePR(session, input) {
 function handleEnterWorktree(session, input) {
   const target = str(input.tool_input?.path) || str(input.tool_input?.name);
   if (target === "" || !input.cwd) return "no worktree target";
-  const name = (0, import_node_path5.basename)(target);
+  const name = (0, import_node_path6.basename)(target);
   const entries = worktreeList(input.cwd);
-  const match = entries.find((e) => e.branch === name || (0, import_node_path5.basename)(e.path) === name);
+  const match = entries.find((e) => e.branch === name || (0, import_node_path6.basename)(e.path) === name);
   addWorktree(session, { path: match?.path ?? target, branch: match?.branch ?? name });
   return "worktree " + name;
 }
@@ -673,7 +948,7 @@ function handlePlan(session, input) {
   const fp = str(input.tool_input?.file_path);
   if (!PLAN_PATH_RE.test(fp)) return "not a plan path";
   setPlan(session, fp);
-  return "plan " + (0, import_node_path5.basename)(fp);
+  return "plan " + (0, import_node_path6.basename)(fp);
 }
 function route(session, input) {
   const event = str(input.hook_event_name);
@@ -715,7 +990,7 @@ function publishState(session) {
   publish({
     tricorder_prs: prs.map((p) => p.number === null ? "PR" : "#" + p.number).join(" "),
     tricorder_subagents: subs.length === 0 ? "" : String(subs.length),
-    tricorder_plan: plan === null ? "" : (0, import_node_path5.basename)(plan)
+    tricorder_plan: plan === null ? "" : (0, import_node_path6.basename)(plan)
   });
 }
 function parse2(raw) {
@@ -738,7 +1013,7 @@ function capture(raw) {
     if (iterm !== void 0 && iterm !== "") setItermId(session, iterm);
     if (input.cwd !== void 0 && input.cwd !== "") {
       setCwd(session, input.cwd);
-      setLabelIfAbsent(session, (0, import_node_path5.basename)(input.cwd) || session.slice(0, LABEL_FALLBACK_LEN));
+      setLabelIfAbsent(session, (0, import_node_path6.basename)(input.cwd) || session.slice(0, LABEL_FALLBACK_LEN));
     }
   }
   const reaction = route(session, input);
@@ -751,35 +1026,35 @@ function capture(raw) {
 
 // src/sound.ts
 var import_node_child_process3 = require("node:child_process");
-var import_node_fs5 = require("node:fs");
-var import_node_path6 = require("node:path");
+var import_node_fs6 = require("node:fs");
+var import_node_path7 = require("node:path");
 var AFPLAY = "/usr/bin/afplay";
 var VALID_EVENTS = ["question", "permission", "stop", "plan"];
 var DEBOUNCE_MS = 1500;
-var LAST_SOUND_FILE = (0, import_node_path6.join)(DATA_DIR, ".last-sound");
+var LAST_SOUND_FILE = (0, import_node_path7.join)(DATA_DIR, ".last-sound");
 function isSoundEvent(value) {
   return value !== void 0 && VALID_EVENTS.includes(value);
 }
 function ensureBundledSounds() {
   const root = process.env.CLAUDE_PLUGIN_ROOT;
   if (root === void 0) return;
-  const from = (0, import_node_path6.join)(root, "sounds");
-  if (!(0, import_node_fs5.existsSync)(from)) return;
+  const from = (0, import_node_path7.join)(root, "sounds");
+  if (!(0, import_node_fs6.existsSync)(from)) return;
   ensureDir(SOUNDS_DIR);
-  (0, import_node_fs5.readdirSync)(from).filter((name) => !(0, import_node_fs5.existsSync)((0, import_node_path6.join)(SOUNDS_DIR, name))).forEach((name) => {
-    (0, import_node_fs5.copyFileSync)((0, import_node_path6.join)(from, name), (0, import_node_path6.join)(SOUNDS_DIR, name));
+  (0, import_node_fs6.readdirSync)(from).filter((name) => !(0, import_node_fs6.existsSync)((0, import_node_path7.join)(SOUNDS_DIR, name))).forEach((name) => {
+    (0, import_node_fs6.copyFileSync)((0, import_node_path7.join)(from, name), (0, import_node_path7.join)(SOUNDS_DIR, name));
   });
 }
 function debounced() {
   const now = Date.now();
   try {
-    const last = Number((0, import_node_fs5.readFileSync)(LAST_SOUND_FILE, "utf8").trim());
+    const last = Number((0, import_node_fs6.readFileSync)(LAST_SOUND_FILE, "utf8").trim());
     if (Number.isFinite(last) && now - last < DEBOUNCE_MS) return true;
   } catch {
   }
   try {
     ensureDir(DATA_DIR);
-    (0, import_node_fs5.writeFileSync)(LAST_SOUND_FILE, String(now));
+    (0, import_node_fs6.writeFileSync)(LAST_SOUND_FILE, String(now));
   } catch {
   }
   return false;
@@ -811,7 +1086,7 @@ function playSound(eventArg, raw) {
     log("sound " + eventArg + " \u2192 disabled, skip");
     return;
   }
-  if (!(0, import_node_fs5.existsSync)(entry.file)) {
+  if (!(0, import_node_fs6.existsSync)(entry.file)) {
     log("sound " + eventArg + " \u2192 missing file " + entry.file);
     return;
   }
@@ -852,7 +1127,7 @@ function mute(arg) {
 }
 
 // src/warp.ts
-var import_node_fs6 = require("node:fs");
+var import_node_fs7 = require("node:fs");
 var SHIP = [
   "                                                  ______",
   "                                     ___.--------'------`---------.____",
@@ -901,7 +1176,7 @@ function warp() {
     fd = STDOUT_FD;
   } else {
     try {
-      fd = (0, import_node_fs6.openSync)("/dev/tty", "w");
+      fd = (0, import_node_fs7.openSync)("/dev/tty", "w");
     } catch {
       return;
     }
@@ -912,18 +1187,18 @@ function warp() {
   const frameCount = Math.ceil((cols + shipWidth) / STEP);
   const offsets = Array.from({ length: frameCount }, (_, i) => -shipWidth + i * STEP);
   try {
-    (0, import_node_fs6.writeSync)(fd, HIDE_CURSOR + "\n".repeat(rows));
+    (0, import_node_fs7.writeSync)(fd, HIDE_CURSOR + "\n".repeat(rows));
     offsets.forEach((offset) => {
-      (0, import_node_fs6.writeSync)(fd, frame(offset, cols, rows));
+      (0, import_node_fs7.writeSync)(fd, frame(offset, cols, rows));
       sleep(FRAME_MS);
     });
     const blanks = SHIP.map(() => "\r" + CLEAR_LINE).join("\n") + "\n";
-    (0, import_node_fs6.writeSync)(fd, up(rows) + blanks + SHOW_CURSOR);
+    (0, import_node_fs7.writeSync)(fd, up(rows) + blanks + SHOW_CURSOR);
   } catch {
   } finally {
     if (!useStdout) {
       try {
-        (0, import_node_fs6.closeSync)(fd);
+        (0, import_node_fs7.closeSync)(fd);
       } catch {
       }
     }
@@ -987,8 +1262,8 @@ function soundEnable(event, arg) {
 }
 
 // src/catalog.ts
-var import_node_fs7 = require("node:fs");
-var import_node_path7 = require("node:path");
+var import_node_fs8 = require("node:fs");
+var import_node_path8 = require("node:path");
 var SOUND_EVENTS2 = ["question", "permission", "stop", "plan"];
 var ALLOWED_HOSTS = /* @__PURE__ */ new Set(["www.trekcore.com", "trekcore.com"]);
 var BYTES_PER_KB = 1024;
@@ -1005,8 +1280,8 @@ function sanitizeFilename(name) {
   return cleaned === "" ? "clip" : cleaned;
 }
 function deriveFilename(url, name) {
-  const base = name !== void 0 && name !== "" ? sanitizeFilename(name) : sanitizeFilename((0, import_node_path7.basename)(url.pathname));
-  const ext = (0, import_node_path7.extname)(url.pathname) || DEFAULT_EXT;
+  const base = name !== void 0 && name !== "" ? sanitizeFilename(name) : sanitizeFilename((0, import_node_path8.basename)(url.pathname));
+  const ext = (0, import_node_path8.extname)(url.pathname) || DEFAULT_EXT;
   return base + ext;
 }
 async function soundSet(eventArg, urlArg, nameArg) {
@@ -1047,8 +1322,8 @@ async function soundSet(eventArg, urlArg, nameArg) {
   }
   ensureDir(SOUNDS_DIR);
   const filename = deriveFilename(url, nameArg);
-  const dest = (0, import_node_path7.join)(SOUNDS_DIR, filename);
-  (0, import_node_fs7.writeFileSync)(dest, Buffer.from(bytes));
+  const dest = (0, import_node_path8.join)(SOUNDS_DIR, filename);
+  (0, import_node_fs8.writeFileSync)(dest, Buffer.from(bytes));
   const cfg = loadConfig();
   const sounds = { ...cfg.sounds, [eventArg]: { enabled: true, file: dest } };
   saveConfig({ ...cfg, sounds });
@@ -1068,6 +1343,197 @@ function worktreeClick(arg) {
   process.stdout.write(mode + "\n");
 }
 
+// src/preview.ts
+var import_node_child_process4 = require("node:child_process");
+var import_node_fs9 = require("node:fs");
+var import_node_os2 = require("node:os");
+var import_node_path9 = require("node:path");
+var PREVIEW_RENDER = "preview-render";
+var SESSION = "preview";
+var EXAMPLE_DIR_NAME = "example";
+var EXAMPLE_PR_URL = "https://example.invalid/pull/";
+var CURRENT_BRANCH = "fix-login";
+var OTHER_BRANCH = "add-tests";
+var CURRENT_PR_NUMBER = 12;
+var OTHER_PR_NUMBER = 13;
+var CONTEXT_USED_PCT = 42;
+var MODEL_NAME = "Opus 5.5";
+var PREVIEW_COLUMNS = "90";
+var RENDER_TIMEOUT_MS = 1e4;
+var FIVE_HOUR_USED_PCT = 37;
+var FIVE_HOUR_ELAPSED_PCT = 40;
+var SEVEN_DAY_USED_PCT = 12;
+var SEVEN_DAY_ELAPSED_PCT = 50;
+var exampleDir = () => (0, import_node_path9.join)((0, import_node_os2.homedir)(), EXAMPLE_DIR_NAME);
+function makeDirtyFolder(path) {
+  (0, import_node_fs9.mkdirSync)(path, { recursive: true });
+  (0, import_node_fs9.writeFileSync)((0, import_node_path9.join)(path, "notes.txt"), "not committed yet\n");
+  try {
+    (0, import_node_child_process4.execFileSync)("git", ["init", "-q"], { cwd: path, stdio: "ignore", env: { PATH: process.env.PATH ?? "", HOME: (0, import_node_os2.homedir)() } });
+  } catch {
+  }
+}
+function seedSession() {
+  addPR(SESSION, { number: CURRENT_PR_NUMBER, url: EXAMPLE_PR_URL + CURRENT_PR_NUMBER, branch: CURRENT_BRANCH });
+  addPR(SESSION, { number: OTHER_PR_NUMBER, url: EXAMPLE_PR_URL + OTHER_PR_NUMBER, branch: OTHER_BRANCH });
+  addWorktree(SESSION, { path: (0, import_node_path9.join)(exampleDir(), OTHER_BRANCH), branch: OTHER_BRANCH });
+  addSubagent(SESSION, "a", { type: "Explore", desc: "", model: "Opus 4.8", startedAt: 0 });
+  addSubagent(SESSION, "b", { type: "review", desc: "", model: "Sonnet 5", startedAt: 0 });
+  setPlan(SESSION, (0, import_node_path9.join)(exampleDir(), "plan.md"));
+}
+function renderPreviewSession() {
+  seedSession();
+  const path = (0, import_node_path9.join)(exampleDir(), CURRENT_BRANCH);
+  makeDirtyFolder(path);
+  renderStatusline(
+    JSON.stringify({
+      session_id: SESSION,
+      cwd: path,
+      worktree: { path, name: CURRENT_BRANCH, branch: CURRENT_BRANCH },
+      model: { display_name: MODEL_NAME },
+      context_window: { used_percentage: CONTEXT_USED_PCT },
+      rate_limits: {
+        five_hour: { used_percentage: FIVE_HOUR_USED_PCT, resets_at: resetsAtS(FIVE_HOUR_ELAPSED_PCT, Date.now() / MS_PER_S, FIVE_HOUR_WINDOW_S) },
+        seven_day: { used_percentage: SEVEN_DAY_USED_PCT, resets_at: resetsAtS(SEVEN_DAY_ELAPSED_PCT, Date.now() / MS_PER_S, SEVEN_DAY_WINDOW_S) }
+      }
+    })
+  );
+}
+function previewFields() {
+  const cfg = loadConfig();
+  const home = (0, import_node_fs9.mkdtempSync)((0, import_node_path9.join)((0, import_node_os2.tmpdir)(), "tricorder-preview-"));
+  try {
+    const dir = (0, import_node_path9.join)(home, ".claude", "tricorder");
+    (0, import_node_fs9.mkdirSync)(dir, { recursive: true });
+    const fields2 = { ...cfg.statusline.fields, intro: false };
+    (0, import_node_fs9.writeFileSync)((0, import_node_path9.join)(dir, "config.json"), serialize({ ...cfg, muted: true, statusline: { ...cfg.statusline, fields: fields2 } }));
+    const script = process.argv[1];
+    if (!script) throw new Error("tricorder: cannot preview, the path of this program is unknown");
+    const drawn = (0, import_node_child_process4.execFileSync)(process.execPath, [script, "fields", PREVIEW_RENDER], {
+      env: { PATH: process.env.PATH ?? "", HOME: home, COLUMNS: PREVIEW_COLUMNS },
+      encoding: "utf8",
+      timeout: RENDER_TIMEOUT_MS
+    });
+    const intro = FIELDS.find((f) => f.id === "intro");
+    const note = cfg.statusline.fields.intro && intro ? [intro.sample + "   (crosses the line for the first seconds of a session)"] : [];
+    process.stdout.write([plainText(drawn).trimEnd(), ...note].join("\n") + "\n");
+  } finally {
+    (0, import_node_fs9.rmSync)(home, { recursive: true, force: true });
+  }
+}
+
+// src/questions.ts
+var ENABLE_ALL_LABEL = "Enable all";
+var OPTIONS_PER_QUESTION = 4;
+var QUESTIONS_PER_CALL = 4;
+var MIN_OPTIONS = 2;
+var HEADER_MAX_CHARS = 12;
+function firstSentence(text) {
+  const end = text.indexOf(". ");
+  return end === -1 ? text : text.slice(0, end + 1);
+}
+function pieces(items, size) {
+  return Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, (i + 1) * size));
+}
+function chunk(items) {
+  const groups = pieces(items, OPTIONS_PER_QUESTION);
+  const lastIndex = groups.length - 1;
+  const last = groups[lastIndex];
+  const before = groups[lastIndex - 1];
+  if (last === void 0 || before === void 0 || last.length >= MIN_OPTIONS) return groups;
+  return [...groups.slice(0, lastIndex - 1), before.slice(0, -1), [...before.slice(-1), ...last]];
+}
+function buildQuestionCalls(fields2) {
+  const options = [
+    { label: ENABLE_ALL_LABEL, description: "Turn on every field listed." },
+    ...fields2.map((f) => ({ label: f.name, description: firstSentence(f.shows) }))
+  ];
+  const groups = chunk(options);
+  const questions = groups.map((group, i) => ({
+    question: `Tick the fields you want to see (part ${i + 1} of ${groups.length}). Anything you leave unticked is turned off. Tick at least one; to start over, tick ${ENABLE_ALL_LABEL}.`,
+    header: `Fields ${i + 1}`.slice(0, HEADER_MAX_CHARS),
+    multiSelect: true,
+    options: group
+  }));
+  return pieces(questions, QUESTIONS_PER_CALL);
+}
+
+// src/fieldscmd.ts
+var ALL = "all";
+function accountTypeFor(arg) {
+  if (arg === void 0) return resolveType(loadConfig().statusline.mode, detectAccount().type);
+  if (isDetectedType(arg)) return arg;
+  process.stderr.write("tricorder: unknown account type: " + arg + "\nvalid: " + DETECTED_TYPES.join(", ") + "\n");
+  process.exitCode = 1;
+  return null;
+}
+function detect() {
+  const cfg = loadConfig();
+  const detected = detectAccount();
+  const type = resolveType(cfg.statusline.mode, detected.type);
+  process.stdout.write(JSON.stringify({ ...detected, type, mode: cfg.statusline.mode }) + "\n");
+}
+function describeFields(typeArg) {
+  const type = accountTypeFor(typeArg);
+  if (type === null) return;
+  const cfg = loadConfig();
+  const out = fieldsFor(type).map((f) => ({
+    id: f.id,
+    name: f.name,
+    shows: f.shows,
+    sample: f.sample,
+    legend: f.legend,
+    enabled: cfg.statusline.fields[f.id]
+  }));
+  process.stdout.write(serialize({ type, fields: out }));
+}
+function questionsFor(typeArg) {
+  const type = accountTypeFor(typeArg);
+  if (type === null) return;
+  const list = fieldsFor(type);
+  const labels = Object.fromEntries(list.map((f) => [f.name, f.id]));
+  process.stdout.write(serialize({ enableAllLabel: ENABLE_ALL_LABEL, labels, calls: buildQuestionCalls(list) }));
+}
+function parseFieldList(arg) {
+  if (arg.trim().toLowerCase() === ALL) return { ids: FIELD_IDS, unknown: [] };
+  const parts = arg.split(",").map((p) => p.trim()).filter(Boolean);
+  return { ids: parts.filter(isFieldId), unknown: parts.filter((p) => !isFieldId(p)) };
+}
+function setFields(arg) {
+  const { ids, unknown } = parseFieldList(arg ?? "");
+  if (unknown.length) {
+    process.stderr.write("tricorder: unknown field(s): " + unknown.join(", ") + "\nvalid: " + FIELD_IDS.join(", ") + "\n");
+    process.exitCode = 1;
+    return;
+  }
+  if (!ids.length) {
+    process.stdout.write("no fields given; nothing changed\n");
+    return;
+  }
+  const cfg = loadConfig();
+  const fields2 = buildFields((id) => ids.includes(id));
+  saveConfig({ ...cfg, statusline: { ...cfg.statusline, fields: fields2 } });
+  log("fields set \u2192 " + ids.join(","));
+  process.stdout.write("on: " + ids.join(", ") + "\n");
+}
+var SUBCOMMANDS = {
+  describe: describeFields,
+  questions: questionsFor,
+  preview: () => previewFields(),
+  [PREVIEW_RENDER]: () => renderPreviewSession(),
+  // internal: `preview` runs it in a throwaway home
+  set: setFields
+};
+var USAGE = "usage: tricorder fields describe [type] | fields questions [type] | fields preview | fields set <id,id,...|all>\n";
+function isSubCommand(name) {
+  return name !== void 0 && Object.hasOwn(SUBCOMMANDS, name);
+}
+function fields(sub, arg) {
+  if (isSubCommand(sub)) return SUBCOMMANDS[sub](arg);
+  process.stderr.write(USAGE);
+  process.exitCode = 1;
+}
+
 // src/main.ts
 var CMD_INDEX = 2;
 var ARG_INDEX = 3;
@@ -1080,6 +1546,8 @@ var COMMANDS = {
   sound: () => playSound(process.argv[ARG_INDEX], readStdin()),
   mute: () => mute(process.argv[ARG_INDEX]),
   "worktree-click": () => worktreeClick(process.argv[ARG_INDEX]),
+  detect: () => detect(),
+  fields: () => fields(process.argv[ARG_INDEX], process.argv[ARG2_INDEX]),
   warp: () => warp(),
   logs: () => showLogs(process.argv[ARG_INDEX]),
   status: () => status(),

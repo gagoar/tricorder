@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { loadConfig, type WorktreeClickMode } from "./config";
+import { loadConfig, type Config, type WorktreeClickMode } from "./config";
 import {
   addWorktree,
   getPlan,
@@ -11,7 +11,8 @@ import {
   setLabel,
   setModel,
 } from "./state";
-import { currentBranch } from "./git";
+import { currentBranch, isDirty } from "./git";
+import { elapsedPct, FIVE_HOUR_WINDOW_S, limitBand, MS_PER_S, PACE_STYLES, SEVEN_DAY_WINDOW_S, type PaceConfig } from "./pace";
 
 // ---- payload shape (subset of the statusline stdin JSON) -------------------
 
@@ -38,6 +39,16 @@ interface Workspace {
   readonly current_dir?: string;
   readonly git_worktree?: string;
 }
+// A usage limit as Claude Code reports it (subscription accounts only).
+// `resets_at` is when the window ends, in epoch seconds.
+interface RateWindow {
+  readonly used_percentage?: number | null;
+  readonly resets_at?: number | null;
+}
+interface RateLimits {
+  readonly five_hour?: RateWindow;
+  readonly seven_day?: RateWindow;
+}
 interface Payload {
   readonly session_id?: string;
   readonly cwd?: string;
@@ -45,6 +56,7 @@ interface Payload {
   readonly workspace?: Workspace;
   readonly worktree?: Worktree;
   readonly context_window?: ContextWindow;
+  readonly rate_limits?: RateLimits;
 }
 
 // ---- terminal formatting ---------------------------------------------------
@@ -58,7 +70,7 @@ const GREEN = 32;
 const CYAN = 96;
 const DIM = 90;
 
-function sgr(code: number, text: string): string {
+function sgr(code: number | string, text: string): string {
   return ESC + "[" + code + "m" + text + RESET;
 }
 function osc8(url: string, text: string): string {
@@ -99,8 +111,12 @@ function charWidth(ch: string): number {
   if (cp === VS16) return 0;
   return cp >= WIDE_MIN ? WIDE_WIDTH : NARROW_WIDTH;
 }
+// The text as it looks on screen: colour codes and link wrappers removed.
+export function plainText(s: string): string {
+  return s.replace(OSC8_RE, "").replace(SGR_RE, "");
+}
 function visWidth(s: string): number {
-  const clean = s.replace(OSC8_RE, "").replace(SGR_RE, "");
+  const clean = plainText(s);
   return [...clean].reduce((w, ch) => w + charWidth(ch), 0);
 }
 
@@ -147,6 +163,22 @@ function contextSegment(cw: ContextWindow | undefined): string | null {
   return ICON_CTX + " " + sgr(ctxColor(pctInt), pctInt + "%");
 }
 
+// ---- usage limits (5h / 7d) with pace ---------------------------------------
+
+// "5h 🐕 37%": the label, an animal for the pace, and the percent used in the
+// pace colour. Without a usable pace (window unknown or just started) only the
+// label and percent. Nothing when Claude Code sent no number for the limit.
+function usageSegment(label: string, win: RateWindow | undefined, windowS: number, nowS: number, pace: PaceConfig): string | null {
+  const used = win?.used_percentage;
+  if (typeof used !== "number") return null;
+  const pct = Math.round(used) + "%";
+  const resets = win?.resets_at;
+  const band = limitBand(used, typeof resets === "number" ? elapsedPct(resets, nowS, windowS) : null, pace);
+  if (band === null) return label + " " + pct;
+  const style = PACE_STYLES[band];
+  return label + " " + style.icon + " " + sgr(style.color, pct);
+}
+
 // ---- location (worktree / branch) + PR matching -----------------------------
 
 // Claude Code only sends `worktree` / `workspace.git_worktree` inside a
@@ -183,15 +215,25 @@ function prSuffix(session: string, branch: string | null): string {
 
 // ---- segments --------------------------------------------------------------
 
-function locationSegment(loc: Location, session: string, mode: WorktreeClickMode): string | null {
+interface LocationOptions {
+  readonly mode: WorktreeClickMode;
+  readonly showPrs: boolean;
+  // The folder has uncommitted changes: a yellow "*" goes after the branch.
+  readonly dirty: boolean;
+}
+
+function locationSegment(loc: Location, session: string, opts: LocationOptions): string | null {
   if (loc.path === "") return null;
+  const { mode, showPrs } = opts;
+  const mark = opts.dirty ? sgr(YELLOW, "*") : "";
+  const prs = (branch: string | null): string => (showPrs ? prSuffix(session, branch) : "");
   if (loc.isWorktree) {
     const label = loc.branch ?? (basename(loc.path) || loc.path);
-    return worktreeLink(loc.path, ICON_TREE + " " + label, mode) + prSuffix(session, loc.branch);
+    return worktreeLink(loc.path, ICON_TREE + " " + label + mark, mode) + prs(loc.branch);
   }
   if (loc.branch !== null) {
-    const label = (basename(loc.path) || loc.path) + "(" + loc.branch + ")";
-    return worktreeLink(loc.path, label, mode) + prSuffix(session, loc.branch);
+    const label = (basename(loc.path) || loc.path) + "(" + loc.branch + mark + ")";
+    return worktreeLink(loc.path, label, mode) + prs(loc.branch);
   }
   // Non-git directory: today's fallback, no branch to show.
   return worktreeLink(loc.path, ICON_TREE + " " + (basename(loc.path) || loc.path), mode);
@@ -201,14 +243,25 @@ function terminalWidth(): number {
   return Number(process.env.COLUMNS) || (process.stdout.columns ?? 0);
 }
 
-function line1(p: Payload, session: string, loc: Location): string {
-  const cfg = loadConfig();
-  const mid = [locationSegment(loc, session, cfg.worktreeClick), contextSegment(p.context_window), p.model?.display_name ?? null]
+// Each field can be switched off in the config (statusline.fields, see src/fields.ts).
+function line1(p: Payload, session: string, loc: Location, cfg: Config): string {
+  const on = cfg.statusline.fields;
+  // git is only asked when the field is on, so switching it off also saves the call.
+  const dirty = on.location && on.dirty && Boolean(loc.path) && isDirty(loc.path) === true;
+  const nowS = Date.now() / MS_PER_S;
+  const mid = [
+    on.location ? locationSegment(loc, session, { mode: cfg.worktreeClick, showPrs: on.prs, dirty }) : null,
+    on.context ? contextSegment(p.context_window) : null,
+    on.model ? (p.model?.display_name ?? null) : null,
+    on.usage5h ? usageSegment("5h", p.rate_limits?.five_hour, FIVE_HOUR_WINDOW_S, nowS, cfg.statusline.pace) : null,
+    on.usage7d ? usageSegment("7d", p.rate_limits?.seven_day, SEVEN_DAY_WINDOW_S, nowS, cfg.statusline.pace) : null,
+  ]
     .filter((s): s is string => s !== null && s !== "")
     .join(SEP);
   // Passive mute indicator only (audio control lives in the menu-bar app now).
-  const left = cfg.muted ? ICON_MUTED + " " + mid : mid;
-  const plan = session === "" ? null : getPlan(session);
+  const showMute = cfg.muted && on.muteIcon;
+  const left = showMute ? [ICON_MUTED, mid].filter(Boolean).join(" ") : mid;
+  const plan = !session || !on.plan ? null : getPlan(session);
   if (plan === null) return left;
   const right = openLink(plan, ICON_MAP + " " + sgr(DIM, "plan"));
   const width = terminalWidth();
@@ -221,11 +274,13 @@ function line1(p: Payload, session: string, loc: Location): string {
 // once the session has actually switched — never a repo-wide worktree list.
 // Excluded by branch, not path — a symlinked path (macOS /tmp vs /private/tmp)
 // can make the same worktree look like two different paths.
-function worktreeLine(session: string, loc: Location): string | null {
+function worktreeLine(session: string, loc: Location, cfg: Config): string | null {
   const others = readWorktrees(session).filter((w) => w.branch !== loc.branch);
-  if (others.length === 0) return null;
-  const mode = loadConfig().worktreeClick;
-  return others.map((w) => worktreeLink(w.path, w.branch, mode) + prSuffix(session, w.branch)).join("  ");
+  if (!others.length) return null;
+  const showPrs = cfg.statusline.fields.prs;
+  return others
+    .map((w) => worktreeLink(w.path, w.branch, cfg.worktreeClick) + (showPrs ? prSuffix(session, w.branch) : ""))
+    .join("  ");
 }
 
 // All running sub-agents on one compact line: "🤖 Explore Opus 4.8, review Sonnet 5".
@@ -267,7 +322,9 @@ export function renderStatusline(raw: string): void {
     const iterm = process.env.ITERM_SESSION_ID;
     if (iterm !== undefined && iterm !== "") setItermId(session, iterm);
   }
-  if (hasSession) {
+  const cfg = loadConfig();
+  const on = cfg.statusline.fields;
+  if (hasSession && on.intro) {
     const el = introElapsed(session);
     if (el < ANIM_MS) {
       process.stdout.write(introFrame(el) + "\n");
@@ -275,9 +332,9 @@ export function renderStatusline(raw: string): void {
     }
   }
   const lines = [
-    line1(payload, session, loc),
-    hasSession ? worktreeLine(session, loc) : null,
-    hasSession ? subagentLine(session) : null,
+    line1(payload, session, loc, cfg),
+    hasSession && on.worktrees ? worktreeLine(session, loc, cfg) : null,
+    hasSession && on.subagents ? subagentLine(session) : null,
   ].filter((l): l is string => l !== null && l !== "");
   process.stdout.write(lines.join("\n") + "\n");
 }

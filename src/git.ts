@@ -55,6 +55,13 @@ export function currentBranch(cwd: string): string | null {
   return branch === "" ? null : branch;
 }
 
+// True when the folder has changes that are not committed yet: modified,
+// staged or new (untracked) files. null = not a git folder, or git failed.
+export function isDirty(cwd: string): boolean | null {
+  const out = run(["status", "--porcelain"], cwd);
+  return out === null ? null : Boolean(out.trim());
+}
+
 export interface WorktreeEntry {
   readonly path: string;
   readonly branch: string | null;
