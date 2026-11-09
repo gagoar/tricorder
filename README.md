@@ -42,7 +42,7 @@ runtime (or the optional dependency-free build below).
 
 ## Features
 
-- **Multi-line statusline** — a branch-aware location link (current worktree, or `dir(branch)` in a plain repo), a color-graded context-window gauge, model, running sub-agents with their model, and a plan-file link. If you switch worktrees mid-session, the others you've visited list underneath, each with its matched PR shown inline. Only non-empty lines render. A one-shot mini-ship animation greets each new session.
+- **Multi-line statusline** — a branch-aware location link (current worktree, or `dir(branch)` in a plain repo), a color-graded context-window gauge, model, running sub-agents with their model, and a plan-file link. If you switch worktrees mid-session, the others you've visited list underneath, each with its matched PR shown inline. Only non-empty lines render. A one-shot mini-ship animation greets each new session. Every field can be switched off: run `/tricorder:setup` in Claude Code to [choose which to show](#choosing-which-statusline-fields-to-show).
 - **Away-team menu bar** — one icon reflects the highest-priority state across every session (🔴 security, 🟡 question, 🟢 done). Click a row to focus that session's iTerm2 tab, wherever it is. A 🔊 marks whichever row's sound just played, so several "mission complete" rows aren't ambiguous about which one is current.
 - **Restore Sessions** — after a crash or reboot, reopen whole project families in fresh iTerm2 windows with one click, grouped automatically by directory.
 - **Attention klaxons** — four Star Trek voice/chime cues, muted by default, toggled per-event from the menu.
@@ -140,6 +140,21 @@ Pick a different clip for any event from the [sound catalog](https://gagoar.gith
 
 `worktreeClick` controls what clicking the worktree link does: `open` (default, a bare `file://` link — no app needed), `copy` (copies the path to the clipboard), or `both`. `copy`/`both` need the menu-bar app running to handle the click; set it from `setup.sh`'s prompt or the app's "Worktree Link" menu.
 
+### Choosing which statusline fields to show
+
+Every statusline field is optional. In Claude Code run `/tricorder:setup`: it detects whether your account is a subscription or pay per use, explains each field that applies (what it shows, an example, what its icons and colours mean), then asks which ones you want. You can also change them from the terminal:
+
+```
+tricorder detect                     # subscription, payg (pay per use) or unknown
+tricorder fields describe            # the fields that apply to your account, as JSON
+tricorder fields set context,model   # show only these two; everything else off
+tricorder fields set all             # show everything again
+```
+
+The choice is stored in `~/.claude/tricorder/config.json` under `statusline.fields`. All fields are on by default, so nothing changes until you choose. Field ids, in the order they appear on the statusline: `muteIcon`, `location`, `prs`, `context`, `model`, `plan`, `worktrees`, `subagents`, `intro`.
+
+`statusline.mode` is `auto` (default: detect the account type from Claude Code's own `.claude.json`), or `subscription` / `payg` to force it. The detection reads a Claude Code internal file; if that file moves or cannot be read, the type is `unknown` and every field is offered.
+
 ## CLI reference
 
 | Command | Wired to | Does |
@@ -151,6 +166,11 @@ Pick a different clip for any event from the [sound catalog](https://gagoar.gith
 | `sound-set <event> <url> [name]` | catalog page | Fetches a pick and assigns it to an event (trekcore.com only) |
 | `mute [on\|off\|toggle]` | menu | Flips the global mute |
 | `worktree-click <open\|copy\|both>` | setup / menu | Sets what clicking the worktree link does |
+| `detect` | `/tricorder:setup` | Prints the detected account type as JSON |
+| `fields describe [type]` | `/tricorder:setup` | Lists the fields that apply, with explanations and on/off state |
+| `fields questions [type]` | `/tricorder:setup` | Prints the tick-box questions the setup command asks (JSON) |
+| `fields preview` | `/tricorder:setup` | Draws the statusline for a made-up session with your fields, so you can see them |
+| `fields set <id,id,...\|all>` | `/tricorder:setup` | Sets exactly which fields are on |
 | `warp` | menu / URL | Flies the Enterprise |
 | `status` | menu (polled) | JSON snapshot for the menu-bar app |
 | `ack <id>` | menu | Clears a session's attention state |

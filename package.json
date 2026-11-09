@@ -10,7 +10,8 @@
     "build": "bash build-slim.sh",
     "build:sea": "bash build-sea.sh",
     "build:handler": "bash build-handler.sh",
-    "build:bar": "bash build-bar.sh"
+    "build:bar": "bash build-bar.sh",
+    "test": "rm -rf build/test && npm run --silent bundle && esbuild test/*.test.ts --bundle --platform=node --format=cjs --target=node24 --outdir=build/test --log-level=warning && node --test build/test/*.test.js"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

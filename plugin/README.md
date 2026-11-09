@@ -34,6 +34,11 @@ One binary, eleven subcommands, dispatched by the first argument:
 | `tricorder sound-set <event> <url> [name]` | the [sound catalog page](https://gagoar.github.io/tricorder/sounds.html) | fetches a clip on demand (trekcore.com only) and assigns it to an event |
 | `tricorder mute [on\|off\|toggle]` | menu-bar app | flips the global mute |
 | `tricorder worktree-click <open\|copy\|both>` | `setup.sh` / menu-bar app | sets what clicking the worktree link does |
+| `tricorder detect` | `/tricorder:setup` | prints the detected account type (subscription, payg or unknown) as JSON |
+| `tricorder fields describe [type]` | `/tricorder:setup` | lists the statusline fields that apply to the account, with explanations and on/off state |
+| `tricorder fields questions [type]` | `/tricorder:setup` | prints the exact tick-box questions the setup command asks (JSON) |
+| `tricorder fields preview` | `/tricorder:setup` | draws the statusline for a made-up session with your chosen fields; touches nothing real |
+| `tricorder fields set <id,id,...\|all>` | `/tricorder:setup` | sets exactly which statusline fields are on |
 | `tricorder warp` | menu-bar app / `tricorder://warp` | flies the Enterprise across a fresh iTerm2 tab |
 | `tricorder status` | menu-bar app (polled every 1s) | prints a JSON snapshot of all sessions + config |
 | `tricorder ack <id>` | menu-bar app | clears a session's attention state |
@@ -71,6 +76,11 @@ Effective config lives at `~/.claude/tricorder/config.json`, seeded on first run
 {
   "muted": true,
   "worktreeClick": "open",
+  "statusline": {
+    "mode": "auto",
+    "fields": { "muteIcon": true, "location": true, "prs": true, "context": true, "model": true,
+                "plan": true, "worktrees": true, "subagents": true, "intro": true }
+  },
   "sounds": {
     "question":   { "enabled": true,  "file": ".../please-specify.mp3" },
     "permission": { "enabled": false, "file": ".../security-authorisation.mp3" },
@@ -81,6 +91,8 @@ Effective config lives at `~/.claude/tricorder/config.json`, seeded on first run
 ```
 
 Sounds are **muted by default** — turn them on from the menu-bar app. `permission` defaults off since under `auto` mode with `skipAutoPermissionPrompt` it never fires anyway, and when it did it doubled up on questions. Edit a `file` to change a sound (or pick one from the [sound catalog](https://gagoar.github.io/tricorder/sounds.html), which fetches it for you), flip `enabled` to silence one event, or set `muted` to silence all. Sounds seed from the plugin's `sounds/` into `~/.claude/tricorder/sounds/` on first play.
+
+`statusline.fields` switches each statusline field on or off (all on by default). Run `/tricorder:setup` in Claude Code to see what each field shows and tick the ones you want, or use `tricorder fields set`. `statusline.mode` is `auto` (detect subscription vs pay per use from Claude Code's `.claude.json`), `subscription` or `payg`.
 
 `worktreeClick` is `open` (a bare `file://` link, no app needed), `copy` (copies the path to the clipboard), or `both`. `copy`/`both` need the menu-bar app running — set it from `setup.sh`, or from the app's "Worktree Link" menu.
 

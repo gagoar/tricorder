@@ -19,6 +19,120 @@ var import_node_path3 = require("node:path");
 var import_node_os = require("node:os");
 var import_node_path = require("node:path");
 var import_node_fs2 = require("node:fs");
+
+// src/fields.ts
+var SUBSCRIPTION = "subscription";
+var PAYG = "payg";
+var UNKNOWN = "unknown";
+var AUTO = "auto";
+var ACCOUNT_TYPES = [SUBSCRIPTION, PAYG];
+var DETECTED_TYPES = [...ACCOUNT_TYPES, UNKNOWN];
+var ACCOUNT_MODES = [AUTO, ...ACCOUNT_TYPES];
+function isAccountMode(value) {
+  return ACCOUNT_MODES.includes(value);
+}
+function isDetectedType(value) {
+  return DETECTED_TYPES.includes(value);
+}
+var EVERY_ACCOUNT = ACCOUNT_TYPES;
+var FIELDS = [
+  {
+    id: "muteIcon",
+    name: "Mute icon",
+    shows: "A speaker icon at the start of the line while sounds are muted.",
+    sample: "\u{1F507}",
+    legend: "\u{1F507} = sounds are muted.",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "location",
+    name: "Location",
+    shows: "The folder and branch you are working in, as a clickable link. In a worktree session it shows the branch with a tree icon.",
+    sample: "my-repo(main)   or   \u{1F333} fix-login",
+    legend: "Clicking opens the folder, copies the path, or both (see worktreeClick in the config).",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "prs",
+    name: "Pull requests",
+    shows: "A clickable tag for each pull request this session opened from the current branch.",
+    sample: "(#12)",
+    legend: "Cyan.",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "context",
+    name: "Context window",
+    shows: "How full the model's context window is.",
+    sample: "\u{1F50B} 42%",
+    legend: "\u{1F50B} = context window. Green below 70%, yellow 70-89%, red from 90%.",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "model",
+    name: "Model",
+    shows: "The name of the model this session is using.",
+    sample: "Opus 5.5",
+    legend: "",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "plan",
+    name: "Plan link",
+    shows: "A link to the current plan file, at the right edge, once the session has one.",
+    sample: "\u{1F5FA}\uFE0F plan",
+    legend: "\u{1F5FA}\uFE0F = plan file. Grey text.",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "worktrees",
+    name: "Other worktrees",
+    shows: "A second line listing the other worktrees this session has visited, each with its pull requests.",
+    sample: "fix-login (#12)  add-tests",
+    legend: "",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "subagents",
+    name: "Sub-agents",
+    shows: "A line listing the sub-agents running right now, with the model each one uses.",
+    sample: "\u{1F916} Explore Opus 4.8, review Sonnet 5",
+    legend: "\u{1F916} = sub-agents. Model names in grey.",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  },
+  {
+    id: "intro",
+    name: "Start-up animation",
+    shows: "A small ship that crosses the line for the first 4 seconds of a session.",
+    sample: "o\u2261\u2261\u2261>",
+    legend: "Cyan.",
+    appliesTo: EVERY_ACCOUNT,
+    defaultOn: true
+  }
+];
+var FIELD_IDS = FIELDS.map((f) => f.id);
+function isFieldId(value) {
+  return FIELD_IDS.includes(value);
+}
+function buildFields(valueFor) {
+  return Object.fromEntries(FIELD_IDS.map((id) => [id, valueFor(id)]));
+}
+function defaultFields() {
+  return buildFields((id) => FIELDS.some((f) => f.id === id && f.defaultOn));
+}
+function fieldsFor(type) {
+  return FIELDS.filter((f) => type === UNKNOWN || f.appliesTo.includes(type));
+}
+
+// src/config.ts
 var JSON_INDENT = 2;
 var DATA_DIR = (0, import_node_path.join)((0, import_node_os.homedir)(), ".claude", "tricorder");
 var CONFIG_PATH = (0, import_node_path.join)(DATA_DIR, "config.json");
@@ -36,6 +150,8 @@ var DEFAULT_CONFIG = {
   // Sounds off by default; turn them on from the menu-bar app.
   muted: true,
   worktreeClick: "open",
+  // Every field on, so nothing changes for an existing user until they choose.
+  statusline: { fields: defaultFields(), mode: AUTO },
   sounds: {
     // "Please specify how you would like to proceed" — plays when Claude waits
     // on you (Notification / AskUserQuestion).
@@ -70,6 +186,14 @@ function loadConfig() {
     return structuredClone(DEFAULT_CONFIG);
   }
 }
+function mergeStatusline(base, override) {
+  const given = override?.fields;
+  const fields2 = buildFields((id) => {
+    const value = given?.[id];
+    return typeof value === "boolean" ? value : base.fields[id];
+  });
+  return { fields: fields2, mode: isAccountMode(override?.mode) ? override.mode : base.mode };
+}
 function mergeConfig(base, override) {
   const events = Object.keys(base.sounds);
   const sounds = Object.fromEntries(
@@ -81,6 +205,7 @@ function mergeConfig(base, override) {
   return {
     muted: typeof override.muted === "boolean" ? override.muted : base.muted,
     worktreeClick: isWorktreeClickMode(override.worktreeClick) ? override.worktreeClick : base.worktreeClick,
+    statusline: mergeStatusline(base.statusline, override.statusline),
     sounds
   };
 }
@@ -374,8 +499,11 @@ function charWidth(ch) {
   if (cp === VS16) return 0;
   return cp >= WIDE_MIN ? WIDE_WIDTH : NARROW_WIDTH;
 }
+function plainText(s) {
+  return s.replace(OSC8_RE, "").replace(SGR_RE, "");
+}
 function visWidth(s) {
-  const clean = s.replace(OSC8_RE, "").replace(SGR_RE, "");
+  const clean = plainText(s);
   return [...clean].reduce((w, ch) => w + charWidth(ch), 0);
 }
 var ICON_MUTED = "\u{1F507}";
@@ -430,37 +558,43 @@ function prSuffix(session, branch) {
   if (session === "" || branch === null) return "";
   return prsForBranch(session, branch).map((pr) => " " + osc8(pr.url, sgr(CYAN, "(" + (pr.number === null ? "PR" : "#" + pr.number) + ")"))).join("");
 }
-function locationSegment(loc, session, mode) {
+function locationSegment(loc, session, mode, showPrs) {
   if (loc.path === "") return null;
+  const prs = (branch) => showPrs ? prSuffix(session, branch) : "";
   if (loc.isWorktree) {
     const label = loc.branch ?? ((0, import_node_path3.basename)(loc.path) || loc.path);
-    return worktreeLink(loc.path, ICON_TREE + " " + label, mode) + prSuffix(session, loc.branch);
+    return worktreeLink(loc.path, ICON_TREE + " " + label, mode) + prs(loc.branch);
   }
   if (loc.branch !== null) {
     const label = ((0, import_node_path3.basename)(loc.path) || loc.path) + "(" + loc.branch + ")";
-    return worktreeLink(loc.path, label, mode) + prSuffix(session, loc.branch);
+    return worktreeLink(loc.path, label, mode) + prs(loc.branch);
   }
   return worktreeLink(loc.path, ICON_TREE + " " + ((0, import_node_path3.basename)(loc.path) || loc.path), mode);
 }
 function terminalWidth() {
   return Number(process.env.COLUMNS) || (process.stdout.columns ?? 0);
 }
-function line1(p, session, loc) {
-  const cfg = loadConfig();
-  const mid = [locationSegment(loc, session, cfg.worktreeClick), contextSegment(p.context_window), p.model?.display_name ?? null].filter((s) => s !== null && s !== "").join(SEP);
-  const left = cfg.muted ? ICON_MUTED + " " + mid : mid;
-  const plan = session === "" ? null : getPlan(session);
+function line1(p, session, loc, cfg) {
+  const on = cfg.statusline.fields;
+  const mid = [
+    on.location ? locationSegment(loc, session, cfg.worktreeClick, on.prs) : null,
+    on.context ? contextSegment(p.context_window) : null,
+    on.model ? p.model?.display_name ?? null : null
+  ].filter((s) => s !== null && s !== "").join(SEP);
+  const showMute = cfg.muted && on.muteIcon;
+  const left = showMute ? [ICON_MUTED, mid].filter(Boolean).join(" ") : mid;
+  const plan = !session || !on.plan ? null : getPlan(session);
   if (plan === null) return left;
   const right = openLink(plan, ICON_MAP + " " + sgr(DIM, "plan"));
   const width = terminalWidth();
   const gap = width > 0 ? Math.max(MARGIN, width - visWidth(left) - visWidth(right) - MARGIN) : MARGIN;
   return left + " ".repeat(gap) + right;
 }
-function worktreeLine(session, loc) {
+function worktreeLine(session, loc, cfg) {
   const others = readWorktrees(session).filter((w) => w.branch !== loc.branch);
-  if (others.length === 0) return null;
-  const mode = loadConfig().worktreeClick;
-  return others.map((w) => worktreeLink(w.path, w.branch, mode) + prSuffix(session, w.branch)).join("  ");
+  if (!others.length) return null;
+  const showPrs = cfg.statusline.fields.prs;
+  return others.map((w) => worktreeLink(w.path, w.branch, cfg.worktreeClick) + (showPrs ? prSuffix(session, w.branch) : "")).join("  ");
 }
 function subagentLine(session) {
   const subs = listSubagents(session);
@@ -495,7 +629,9 @@ function renderStatusline(raw) {
     const iterm = process.env.ITERM_SESSION_ID;
     if (iterm !== void 0 && iterm !== "") setItermId(session, iterm);
   }
-  if (hasSession) {
+  const cfg = loadConfig();
+  const on = cfg.statusline.fields;
+  if (hasSession && on.intro) {
     const el = introElapsed(session);
     if (el < ANIM_MS) {
       process.stdout.write(introFrame(el) + "\n");
@@ -503,9 +639,9 @@ function renderStatusline(raw) {
     }
   }
   const lines = [
-    line1(payload, session, loc),
-    hasSession ? worktreeLine(session, loc) : null,
-    hasSession ? subagentLine(session) : null
+    line1(payload, session, loc, cfg),
+    hasSession && on.worktrees ? worktreeLine(session, loc, cfg) : null,
+    hasSession && on.subagents ? subagentLine(session) : null
   ].filter((l) => l !== null && l !== "");
   process.stdout.write(lines.join("\n") + "\n");
 }
@@ -1068,6 +1204,216 @@ function worktreeClick(arg) {
   process.stdout.write(mode + "\n");
 }
 
+// src/account.ts
+var import_node_fs8 = require("node:fs");
+var import_node_path8 = require("node:path");
+var UNKNOWN_ACCOUNT = { type: UNKNOWN, plan: null, extraUsage: false };
+function readField(value, key) {
+  return typeof value === "object" && value !== null && key in value ? value[key] : void 0;
+}
+function classify(parsed) {
+  if (typeof parsed !== "object" || parsed === null) return UNKNOWN_ACCOUNT;
+  const oauth = readField(parsed, "oauthAccount");
+  if (typeof oauth !== "object" || oauth === null) return { type: PAYG, plan: null, extraUsage: false };
+  const plan = readField(oauth, "organizationType");
+  return {
+    type: SUBSCRIPTION,
+    plan: typeof plan === "string" ? plan : null,
+    extraUsage: readField(oauth, "hasExtraUsageEnabled") === true
+  };
+}
+function accountFilePath() {
+  const dir = process.env.CLAUDE_CONFIG_DIR;
+  if (dir) return (0, import_node_path8.join)(dir, ".claude.json");
+  const home = process.env.HOME;
+  return home ? (0, import_node_path8.join)(home, ".claude.json") : null;
+}
+function detectAccount() {
+  const file = accountFilePath();
+  if (file === null) return UNKNOWN_ACCOUNT;
+  try {
+    return classify(JSON.parse((0, import_node_fs8.readFileSync)(file, "utf8")));
+  } catch {
+    return UNKNOWN_ACCOUNT;
+  }
+}
+function resolveType(mode, detected) {
+  return mode === AUTO ? detected : mode;
+}
+
+// src/preview.ts
+var import_node_child_process4 = require("node:child_process");
+var import_node_fs9 = require("node:fs");
+var import_node_os2 = require("node:os");
+var import_node_path9 = require("node:path");
+var PREVIEW_RENDER = "preview-render";
+var SESSION = "preview";
+var EXAMPLE_DIR = "/example";
+var EXAMPLE_PR_URL = "https://example.invalid/pull/";
+var CURRENT_BRANCH = "fix-login";
+var OTHER_BRANCH = "add-tests";
+var CURRENT_PR_NUMBER = 12;
+var OTHER_PR_NUMBER = 13;
+var CONTEXT_USED_PCT = 42;
+var MODEL_NAME = "Opus 5.5";
+var PREVIEW_COLUMNS = "72";
+var RENDER_TIMEOUT_MS = 1e4;
+function seedSession() {
+  addPR(SESSION, { number: CURRENT_PR_NUMBER, url: EXAMPLE_PR_URL + CURRENT_PR_NUMBER, branch: CURRENT_BRANCH });
+  addPR(SESSION, { number: OTHER_PR_NUMBER, url: EXAMPLE_PR_URL + OTHER_PR_NUMBER, branch: OTHER_BRANCH });
+  addWorktree(SESSION, { path: (0, import_node_path9.join)(EXAMPLE_DIR, OTHER_BRANCH), branch: OTHER_BRANCH });
+  addSubagent(SESSION, "a", { type: "Explore", desc: "", model: "Opus 4.8", startedAt: 0 });
+  addSubagent(SESSION, "b", { type: "review", desc: "", model: "Sonnet 5", startedAt: 0 });
+  setPlan(SESSION, (0, import_node_path9.join)(EXAMPLE_DIR, "plan.md"));
+}
+function renderPreviewSession() {
+  seedSession();
+  const path = (0, import_node_path9.join)(EXAMPLE_DIR, CURRENT_BRANCH);
+  renderStatusline(
+    JSON.stringify({
+      session_id: SESSION,
+      cwd: path,
+      worktree: { path, name: CURRENT_BRANCH, branch: CURRENT_BRANCH },
+      model: { display_name: MODEL_NAME },
+      context_window: { used_percentage: CONTEXT_USED_PCT }
+    })
+  );
+}
+function previewFields() {
+  const cfg = loadConfig();
+  const home = (0, import_node_fs9.mkdtempSync)((0, import_node_path9.join)((0, import_node_os2.tmpdir)(), "tricorder-preview-"));
+  try {
+    const dir = (0, import_node_path9.join)(home, ".claude", "tricorder");
+    (0, import_node_fs9.mkdirSync)(dir, { recursive: true });
+    const fields2 = { ...cfg.statusline.fields, intro: false };
+    (0, import_node_fs9.writeFileSync)((0, import_node_path9.join)(dir, "config.json"), serialize({ ...cfg, muted: true, statusline: { ...cfg.statusline, fields: fields2 } }));
+    const script = process.argv[1];
+    if (!script) throw new Error("tricorder: cannot preview, the path of this program is unknown");
+    const drawn = (0, import_node_child_process4.execFileSync)(process.execPath, [script, "fields", PREVIEW_RENDER], {
+      env: { PATH: process.env.PATH ?? "", HOME: home, COLUMNS: PREVIEW_COLUMNS },
+      encoding: "utf8",
+      timeout: RENDER_TIMEOUT_MS
+    });
+    const intro = FIELDS.find((f) => f.id === "intro");
+    const note = cfg.statusline.fields.intro && intro ? [intro.sample + "   (crosses the line for the first seconds of a session)"] : [];
+    process.stdout.write([plainText(drawn).trimEnd(), ...note].join("\n") + "\n");
+  } finally {
+    (0, import_node_fs9.rmSync)(home, { recursive: true, force: true });
+  }
+}
+
+// src/questions.ts
+var ENABLE_ALL_LABEL = "Enable all";
+var OPTIONS_PER_QUESTION = 4;
+var QUESTIONS_PER_CALL = 4;
+var MIN_OPTIONS = 2;
+var HEADER_MAX_CHARS = 12;
+function firstSentence(text) {
+  const end = text.indexOf(". ");
+  return end === -1 ? text : text.slice(0, end + 1);
+}
+function pieces(items, size) {
+  return Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, (i + 1) * size));
+}
+function chunk(items) {
+  const groups = pieces(items, OPTIONS_PER_QUESTION);
+  const lastIndex = groups.length - 1;
+  const last = groups[lastIndex];
+  const before = groups[lastIndex - 1];
+  if (last === void 0 || before === void 0 || last.length >= MIN_OPTIONS) return groups;
+  return [...groups.slice(0, lastIndex - 1), before.slice(0, -1), [...before.slice(-1), ...last]];
+}
+function buildQuestionCalls(fields2) {
+  const options = [
+    { label: ENABLE_ALL_LABEL, description: "Turn on every field listed." },
+    ...fields2.map((f) => ({ label: f.name, description: firstSentence(f.shows) }))
+  ];
+  const groups = chunk(options);
+  const questions = groups.map((group, i) => ({
+    question: `Tick the fields you want to see (part ${i + 1} of ${groups.length}). Anything you leave unticked is turned off. Tick at least one; to start over, tick ${ENABLE_ALL_LABEL}.`,
+    header: `Fields ${i + 1}`.slice(0, HEADER_MAX_CHARS),
+    multiSelect: true,
+    options: group
+  }));
+  return pieces(questions, QUESTIONS_PER_CALL);
+}
+
+// src/fieldscmd.ts
+var ALL = "all";
+function accountTypeFor(arg) {
+  if (arg === void 0) return resolveType(loadConfig().statusline.mode, detectAccount().type);
+  if (isDetectedType(arg)) return arg;
+  process.stderr.write("tricorder: unknown account type: " + arg + "\nvalid: " + DETECTED_TYPES.join(", ") + "\n");
+  process.exitCode = 1;
+  return null;
+}
+function detect() {
+  const cfg = loadConfig();
+  const detected = detectAccount();
+  const type = resolveType(cfg.statusline.mode, detected.type);
+  process.stdout.write(JSON.stringify({ ...detected, type, mode: cfg.statusline.mode }) + "\n");
+}
+function describeFields(typeArg) {
+  const type = accountTypeFor(typeArg);
+  if (type === null) return;
+  const cfg = loadConfig();
+  const out = fieldsFor(type).map((f) => ({
+    id: f.id,
+    name: f.name,
+    shows: f.shows,
+    sample: f.sample,
+    legend: f.legend,
+    enabled: cfg.statusline.fields[f.id]
+  }));
+  process.stdout.write(serialize({ type, fields: out }));
+}
+function questionsFor(typeArg) {
+  const type = accountTypeFor(typeArg);
+  if (type === null) return;
+  const list = fieldsFor(type);
+  const labels = Object.fromEntries(list.map((f) => [f.name, f.id]));
+  process.stdout.write(serialize({ enableAllLabel: ENABLE_ALL_LABEL, labels, calls: buildQuestionCalls(list) }));
+}
+function parseFieldList(arg) {
+  if (arg.trim().toLowerCase() === ALL) return { ids: FIELD_IDS, unknown: [] };
+  const parts = arg.split(",").map((p) => p.trim()).filter(Boolean);
+  return { ids: parts.filter(isFieldId), unknown: parts.filter((p) => !isFieldId(p)) };
+}
+function setFields(arg) {
+  const { ids, unknown } = parseFieldList(arg ?? "");
+  if (unknown.length) {
+    process.stderr.write("tricorder: unknown field(s): " + unknown.join(", ") + "\nvalid: " + FIELD_IDS.join(", ") + "\n");
+    process.exitCode = 1;
+    return;
+  }
+  if (!ids.length) {
+    process.stdout.write("no fields given; nothing changed\n");
+    return;
+  }
+  const cfg = loadConfig();
+  const fields2 = buildFields((id) => ids.includes(id));
+  saveConfig({ ...cfg, statusline: { ...cfg.statusline, fields: fields2 } });
+  log("fields set \u2192 " + ids.join(","));
+  process.stdout.write("on: " + ids.join(", ") + "\n");
+}
+var SUBCOMMANDS = {
+  describe: describeFields,
+  questions: questionsFor,
+  preview: () => previewFields(),
+  [PREVIEW_RENDER]: () => renderPreviewSession(),
+  // internal: `preview` runs it in a throwaway home
+  set: setFields
+};
+var USAGE = "usage: tricorder fields describe [type] | fields questions [type] | fields preview | fields set <id,id,...|all>\n";
+function isSubCommand(name) {
+  return name !== void 0 && Object.hasOwn(SUBCOMMANDS, name);
+}
+function fields(sub, arg) {
+  if (isSubCommand(sub)) return SUBCOMMANDS[sub](arg);
+  process.stderr.write(USAGE);
+  process.exitCode = 1;
+}
+
 // src/main.ts
 var CMD_INDEX = 2;
 var ARG_INDEX = 3;
@@ -1080,6 +1426,8 @@ var COMMANDS = {
   sound: () => playSound(process.argv[ARG_INDEX], readStdin()),
   mute: () => mute(process.argv[ARG_INDEX]),
   "worktree-click": () => worktreeClick(process.argv[ARG_INDEX]),
+  detect: () => detect(),
+  fields: () => fields(process.argv[ARG_INDEX], process.argv[ARG2_INDEX]),
   warp: () => warp(),
   logs: () => showLogs(process.argv[ARG_INDEX]),
   status: () => status(),
